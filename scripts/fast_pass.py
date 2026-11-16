@@ -100,7 +100,7 @@ def verify(links, limit):
     # фильтр до обрезки по лимиту: иначе первые N могут оказаться ssr/hysteria v1,
     # которые ядро не умеет, и прогон закончится «нечего проверять»
     links = [l for l in links if l.startswith(VERIFIABLE)]
-    path = "/tmp/fast_pass_cand.txt"
+    path = os.path.join(paths.SCRATCH, "fast_pass_cand.txt")
     with open(path, "w") as f:
         for l in links[:limit]:
             f.write(l + "\n")
@@ -161,7 +161,7 @@ def merge_and_publish(rows, alive_links, link_origins=None):
             continue
         seen.add(r["link"])
         merged.append(r)
-    path = "/tmp/fast_pass_merged.json"
+    path = os.path.join(paths.SCRATCH, "fast_pass_merged.json")
     save(path, merged)
     return path, len(merged)
 

@@ -7,7 +7,6 @@
 """
 import os
 import shutil
-import paths  # noqa: E402  (локальные пути проекта)
 
 HOME = os.path.expanduser("~")
 

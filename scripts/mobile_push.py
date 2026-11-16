@@ -246,6 +246,10 @@ def build_sb_config(pairs):
         ob = sbv.to_singbox(p, n["name"])
         if not ob:
             continue
+        # Битый flow валит sing-box на малинке: поддерживается только xtls-rprx-vision
+        flow = str(ob.get("flow") or "")
+        if flow and flow != "xtls-rprx-vision":
+            continue
         inbounds.append({"type": "socks", "tag": "in" + n["name"], "listen": "127.0.0.1",
                          "listen_port": n["port"]})
         outbounds.append(ob)

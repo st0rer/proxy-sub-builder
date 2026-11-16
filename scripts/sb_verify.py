@@ -169,7 +169,9 @@ def build(links):
     return cfg, meta
 
 
-def check_cfg(cfg, path="/tmp/sb_check.json"):
+def check_cfg(cfg, path=None):
+    if path is None:
+        path = os.path.join(paths.SCRATCH, "sb_check.json")
     json.dump(cfg, open(path, "w"))
     r = subprocess.run([SB, "check", "-c", path], capture_output=True, text=True)
     return r.returncode == 0, (r.stdout + r.stderr).strip()[:400]

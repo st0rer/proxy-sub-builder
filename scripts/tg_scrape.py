@@ -22,11 +22,14 @@ import os
 import random
 import re
 import sys
+import threading
 import time
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import paths
+
+subs_lock = threading.Lock()
 
 CACHE_DIR = paths.CACHE
 OUT = os.path.join(CACHE_DIR, "web_links.txt")
@@ -182,12 +185,17 @@ def scan_channel(name, cursor, depth, fetched_subs=None):
 
         # Вытаскиваем и скачиваем внешние подписки (workers.dev, raw.github, /sub)
         sub_cand = [m.group(0).rstrip(".,;)'\"<>") for m in SUB_URL_RE.finditer(html)]
+        to_fetch = []
         for su in dict.fromkeys(sub_cand):
-            if is_candidate_sub(su) and su not in fetched_subs:
-                fetched_subs[su] = int(time.time())
-                sub_links = fetch_sub_links(su)
-                if sub_links:
-                    links += sub_links
+            if is_candidate_sub(su):
+                with subs_lock:
+                    if su not in fetched_subs:
+                        fetched_subs[su] = int(time.time())
+                        to_fetch.append(su)
+        for su in to_fetch:
+            sub_links = fetch_sub_links(su)
+            if sub_links:
+                links += sub_links
 
         mentions |= {m.lower() for m in MENTION_RE.findall(html)}
         seen_ids += new_ids

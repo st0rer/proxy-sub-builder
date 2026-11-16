@@ -58,7 +58,7 @@ def check(quiet=False):
     clash = os.path.join(SUB, "clash.yaml")
     if not os.path.exists(clash):
         return False, "clash.yaml отсутствует"
-    r = subprocess.run([MIHOMO, "-t", "-d", "/tmp", "-f", clash], capture_output=True, text=True)
+    r = subprocess.run([MIHOMO, "-t", "-d", paths.SCRATCH, "-f", clash], capture_output=True, text=True)
     if r.returncode != 0:
         return False, "clash.yaml не проходит mihomo -t"
     return True, f"{n} нод"
