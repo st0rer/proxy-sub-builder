@@ -12,6 +12,9 @@
 Установка:
 
 ```bash
+# Разрешить запуск сервисов пользователя при загрузке ОС (без интерактивного SSH-входа):
+loginctl enable-linger $USER
+
 mkdir -p ~/.config/systemd/user
 cp systemd/*.service systemd/*.timer ~/.config/systemd/user/
 systemctl --user daemon-reload
@@ -21,6 +24,28 @@ journalctl --user -u subs-refresh.service -n 50
 
 Юниты читают `EnvironmentFile=%h/.proxy-sub/env` — положите туда `env.example`
 с заполненными значениями.
+
+## Защита ресурсов и лимиты памяти (cgroups v2)
+
+Все фоновые службы защищены от утечек памяти и зависаний:
+* `subs-refresh.service`: `MemoryMax=2G`, `MemoryHigh=1.5G`, `CPUWeight=50`.
+* `subs-yota.service`: `MemoryMax=1G`, `MemoryHigh=800M`, `CPUWeight=50`.
+* `mobile-watch.service`: `MemoryMax=300M`.
+* При перезагрузке ОС сервисы поднимаются автоматически благодаря `Linger=yes`.
+* Временные файлы блокировок (`flock`) при рестарте сбрасываются ядром.
+
+## Сервер подписок (порт 8899)
+
+Файлы подписок отдаются встроенным легковесным HTTP-сервером:
+* Сервис: `sub-server.service` (`systemctl --user enable --now sub-server.service`).
+* Каталог: `~/vpn_results/sub/`.
+* Эндпоинты:
+  * `http://<server-ip>:8899/nodes.txt` (домашний)
+  * `http://<server-ip>:8899/v2ray.txt`
+  * `http://<server-ip>:8899/clash.yaml`
+  * `http://<server-ip>:8899/yota.txt` (мобильный, симлинк на `sub-yota/yota.txt`)
+  * `http://<server-ip>:8899/yota-nodes.txt`
+  * `http://<server-ip>:8899/yota-clash.yaml`
 
 ## Мониторинг
 
