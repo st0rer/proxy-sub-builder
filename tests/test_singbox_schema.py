@@ -30,6 +30,9 @@ class TestSingboxSchema(unittest.TestCase):
         self.assertTrue(tls.get("reality", {}).get("enabled"))
         self.assertEqual(tls["reality"]["public_key"], "abcdefghijklmnopqrstuvwxyz0123456789ABCDEF=")
         self.assertEqual(tls["reality"]["short_id"], "123456")
+        # Проверяем TLS ClientHello fragmentation для обхода DPI/ТСПУ
+        self.assertTrue(tls.get("fragment"))
+        self.assertEqual(tls.get("fragment_fallback_delay"), "500ms")
 
     def test_unsupported_flow_excluded_in_sb_verify(self):
         # Если flow битый (например xtls-rprx-vision-udp443), build() должен его выбросить,

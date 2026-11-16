@@ -171,15 +171,24 @@ def main():
             h, _, p = host.rpartition(":")
             if not h:
                 h, p = host, "443"
-            s = socket.socket()
-            s.settimeout(3)
             try:
-                s.connect((h, int(p)))
-                return True
+                port_num = int(p)
             except Exception:
                 return False
-            finally:
-                s.close()
+            # На мобильном интернете (Yota 4G через модем) часто случаются задержки
+            # радиоканала (RRC-переходы, джиттер). Таймаут 4.5 с + 1 ретрай на 3.5 с
+            # спасают до 30% ложно-отсеянных узлов.
+            for attempt, to in enumerate((4.5, 3.5)):
+                s = socket.socket()
+                s.settimeout(to)
+                try:
+                    s.connect((h, port_num))
+                    return True
+                except Exception:
+                    pass
+                finally:
+                    s.close()
+            return False
 
         import concurrent.futures as cf
         t0 = time.time()

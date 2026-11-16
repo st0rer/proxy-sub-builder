@@ -30,10 +30,17 @@ for _d in (BASE, CACHE, OUT, SCRATCH, SECRETS):
 
 def binary(name):
     """Путь к движку: PROXY_SUB_BIN → PATH → имя как есть."""
-    p = os.path.join(BIN, name)
-    if os.path.exists(p):
-        return p
-    return shutil.which(name) or name
+    candidates = [name]
+    if os.name == "nt" and not name.endswith(".exe"):
+        candidates.append(name + ".exe")
+    for cand in candidates:
+        p = os.path.join(BIN, cand)
+        if os.path.exists(p):
+            return p
+        w = shutil.which(cand)
+        if w:
+            return w
+    return name
 
 
 def secret(name, default=""):

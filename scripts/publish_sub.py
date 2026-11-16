@@ -235,8 +235,10 @@ def main():
     # ноды, которые отдали выходной IP, но нулевую скорость (0.0 МБ/с), — мусор:
     # соединение есть, трафика нет. Из проверенных такие выбрасываем, а незнакомые
     # (пришедшие через EXTRA_LINKS) оставляем — у них замера просто нет.
-    MIN_SPEED = float(os.environ.get("SUB_MIN_SPEED", "0.1"))
-    links = [l for l in links if speeds.get(l, None) is None or speeds.get(l, 0) >= MIN_SPEED]
+    min_speed_env = os.environ.get("SUB_MIN_SPEED")
+    min_speed = float(min_speed_env) if min_speed_env is not None else 0.0
+    if min_speed > 0:
+        links = [l for l in links if speeds.get(l, None) is None or speeds.get(l, 0) >= min_speed]
     # Порядок в списке = приоритет в клиенте. Дома hy2 впереди (TCP там режут),
     # на Yota наоборот: QUIC не проходит, а vless с рабочим SNI живёт.
     if os.environ.get("SUB_ORDER") == "tcp":

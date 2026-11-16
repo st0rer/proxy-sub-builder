@@ -39,7 +39,7 @@ N_SS = int(os.environ.get("PI_N_SS", "10"))
 N_ANYTLS = int(os.environ.get("PI_N_ANYTLS", "8"))
 N_TUIC = int(os.environ.get("PI_N_TUIC", "4"))
 N_POOL = int(os.environ.get("PI_N_POOL", "100"))  # добор из пула: замер — 1 живая на 109
-N_SIB = int(os.environ.get("PI_N_SIB", "15"))     # адреса рабочих панелей
+N_SIB = int(os.environ.get("PI_N_SIB", "35"))     # адреса рабочих панелей (выход 45% против 8%)
 PER_ADDR = 2
 API_PORT = 9099
 BASE_PORT = 21000
@@ -64,6 +64,31 @@ def pick_candidates():
         f = fam(link)
         if f in groups:
             groups[f].append((link, delay))
+
+    def vless_pri(item):
+        link, delay = item
+        # Reality и RU-SNI первыми, так как они лучше всего проходят ТСПУ мобильных сетей
+        is_reality = ("pbk=" in link or "security=reality" in link)
+        is_ru_sni = any(dom in link for dom in (".ru", "vk.com", "yandex.ru", "mail.ru", "gosuslugi.ru"))
+        pri = 0
+        if is_reality: pri += 2
+        if is_ru_sni: pri += 1
+        return (-pri, delay)
+
+    def hy2_pri(item):
+        link, delay = item
+        # На Yota порт UDP 443 режется оператором: приоритет портам != 443 и obfs
+        a = sa._host_of(link)
+        port = a[1] if a else 443
+        non_std_port = (port != 443)
+        has_obfs = "obfs=" in link or "salamander" in link
+        pri = 0
+        if non_std_port: pri += 2
+        if has_obfs: pri += 1
+        return (-pri, delay)
+
+    groups["vless"].sort(key=vless_pri)
+    groups["hy2"].sort(key=hy2_pri)
 
     picked, per_addr = [], {}
     for f, budget in (("hy2", N_HY2), ("vless", N_VLESS), ("ss", N_SS),

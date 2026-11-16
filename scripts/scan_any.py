@@ -493,6 +493,14 @@ def kill_stale_mihomo():
     """Добить осиротевшие mihomo этого движка: после падения прогона они держат
     порты 7891/9098 и память, а новый запуск молча получает чужие результаты."""
     killed = 0
+    if not os.path.exists("/proc"):
+        if os.name == "nt":
+            try:
+                subprocess.run(["taskkill", "/f", "/im", "mihomo.exe"],
+                               capture_output=True, check=False)
+            except Exception:
+                pass
+        return 0
     for pid in os.listdir("/proc"):
         if not pid.isdigit():
             continue
