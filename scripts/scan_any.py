@@ -99,6 +99,18 @@ SOURCES = {
     "tahmaseb_tuic":   "tahmaseb73/configs-collector-v2ray/main/data/sub/protocols/tuic.txt",
     "shin_all":        "therealaleph/Shin-TG-V2ray-Collector/main/collected_configs.txt",
     "mohamadfg_vless": "mohamadfg-dev/telegram-v2ray-configs-collector/main/category/vless.txt",
+    # Специализированные источники под мобильный интернет РФ (Yota/МегаФон) и обход ТСПУ
+    "igareck_mobile":   "igareck/vpn-configs-for-russia/main/BLACK_VLESS_RUS_mobile.txt",
+    "igareck_wl":       "igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
+    "kort_clean_hy2":   "kort0881/vpn-vless-configs-russia/main/data/githubmirror/clean/hy2.txt",
+    "kort_ru_hy2":      "kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni/hy2.txt",
+    "kort_ru_ss":       "kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni/ss.txt",
+    "vlesscollector":   "vlesscollector/vlesscollector/main/vless_configs.txt",
+    "mehrtat_vless":    "mehrtat/vless-collector/main/vless.txt",
+    "barry_vless":      "barry-far/V2ray-Config/main/Splitted-By-Protocol/vless.txt",
+    "barry_trojan":     "barry-far/V2ray-Config/main/Splitted-By-Protocol/trojan.txt",
+    "mineral_nodes":    "https://raw.githubusercontent.com/LalatinaHub/Mineral/master/result/nodes",
+    "mahdibland_merge": "mahdibland/V2RayAggregator/master/sub/sub_merge.txt",
 }
 def daily_sources():
     """Свежие файлы каталогов-зеркал: node.<домен>/uploads/YYYY/MM/YYYYMMDD.txt.

@@ -8,8 +8,18 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/env.sh"
 #     скорость 1 МБ и только для SPEED_TOP лучших);
 #   * вперёд ставятся vless, а не hy2: на этом пути QUIC не проходит (замер ниже).
 set -uo pipefail
-require PI_HOST
-require PI_PASS
+if [ -z "${PI_HOST:-}" ]; then
+  if [ -f "$VPN_SECRETS/pi_host" ]; then
+    PI_HOST=$(tr -d '\r\n ' < "$VPN_SECRETS/pi_host")
+  fi
+fi
+if [ -z "${PI_PASS:-}" ]; then
+  if [ -f "$VPN_SECRETS/pi_pass" ]; then
+    PI_PASS=$(tr -d '\r\n ' < "$VPN_SECRETS/pi_pass")
+  fi
+fi
+export PI_HOST="${PI_HOST:-}"
+export PI_PASS="${PI_PASS:-}"
 B="$BIN_DIR"
 LOG=$VPN_OUT/refresh_yota.log
 OUT=$VPN_OUT/sub-yota
@@ -52,6 +62,8 @@ if ! flock -n 9; then echo "=== $(date -Is) пропуск: идёт друго�
   # снимок мобильной подписки: своя история, отдельно от домашней
   SUB_DIR="$OUT" SUB_GOOD=$VPN_OUT/good-yota SUB_FILES=nodes-yota.txt,yota.txt,clash.yaml,index.json SUB_MIN_NODES=3 \
     python3 "$B/sub_snapshot.py" save || echo "снимок yota не снят"
+
+  python3 "$B/gc_engine.py" || echo "gc failed"
 
   # hy2-подписку для мобильного не публикуем: QUIC там не проходит
   echo "=== $(date -Is) done yota ==="

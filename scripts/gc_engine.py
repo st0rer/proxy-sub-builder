@@ -53,7 +53,8 @@ def gc_scratch(freed):
     cut = time.time() - SCRATCH_HOURS * 3600
     pats = ("scan_*.yaml", "scan_*.log", "batch_*.yaml", "batch_*.log",
             "verify.yaml", "verify.log", "livechk.yaml", "livechk.log",
-            "_probe.yaml", "vlog.txt", "tr_test.*", "audit*.yaml")
+            "_probe.yaml", "vlog.txt", "tr_test.*", "audit*.yaml",
+            "mobile_candidates*.json", "test_out_*.json", "*.tmp")
     for pat in pats:
         for p in glob.glob(os.path.join(SCRATCH, pat)):
             if os.path.basename(p) in PROTECT:
@@ -72,20 +73,22 @@ def gc_clean(freed):
 
 
 def gc_history(freed):
-    p = os.path.join(CACHE, "history.json")
-    if not os.path.exists(p):
-        return
-    try:
-        h = json.load(open(p))
-    except Exception:
-        return
-    cut = time.time() - HISTORY_DAYS * 86400
-    new = {k: v for k, v in h.items() if isinstance(v, (int, float)) and v >= cut}
-    if len(new) != len(h):
-        tmp = p + ".tmp"
-        json.dump(new, open(tmp, "w"))
-        os.replace(tmp, p)
-        freed["history"] = len(h) - len(new)
+    for fname in ("history.json", "mobile_history.json", "mobile_tested.json"):
+        p = os.path.join(CACHE, fname)
+        if not os.path.exists(p):
+            continue
+        try:
+            h = json.load(open(p))
+        except Exception:
+            continue
+        cut = time.time() - HISTORY_DAYS * 86400
+        if isinstance(h, dict):
+            new = {k: v for k, v in h.items() if (isinstance(v, (int, float)) and v >= cut) or (isinstance(v, dict) and v.get("ts", cut) >= cut)}
+            if len(new) != len(h):
+                tmp = p + ".tmp"
+                json.dump(new, open(tmp, "w"))
+                os.replace(tmp, p)
+                freed["history"] += len(h) - len(new)
 
 
 def gc_web(freed):
@@ -93,7 +96,8 @@ def gc_web(freed):
     if not os.path.exists(p):
         return
     lines = [l.strip() for l in open(p) if l.strip().startswith(("ss://", "vless://", "vmess://",
-                                                               "trojan://", "hy2://", "hysteria2://"))]
+                                                               "trojan://", "hy2://", "hysteria2://",
+                                                               "tuic://", "anytls://"))]
     uniq = list(dict.fromkeys(reversed(lines)))      # свежие в конце файла -> они первыми
     uniq = list(reversed(uniq))[:WEB_MAX]
     if len(uniq) != len(lines):
@@ -104,13 +108,17 @@ def gc_web(freed):
 
 
 def gc_logs(freed):
-    p = os.path.join(RES, "refresh.log")
-    if os.path.exists(p) and os.path.getsize(p) > LOG_MAX:
-        old = p + ".1"
-        if os.path.exists(old):
-            os.remove(old)
-        shutil.move(p, old)
-        freed["log"] = 1
+    log_candidates = glob.glob(os.path.join(RES, "*.log"))
+    for p in log_candidates:
+        try:
+            if os.path.exists(p) and os.path.getsize(p) > LOG_MAX:
+                old = p + ".1"
+                if os.path.exists(old):
+                    os.remove(old)
+                shutil.move(p, old)
+                freed["log"] += 1
+        except OSError:
+            pass
 
 
 def mem_state():

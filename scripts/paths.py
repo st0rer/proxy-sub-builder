@@ -19,10 +19,14 @@ BIN = os.environ.get("PROXY_SUB_BIN", os.path.join(HOME, "bin"))
 # сам код (скрипты лежат рядом)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-CACHE = os.environ.get("PROXY_SUB_CACHE", os.path.join(BASE, "cache"))
-OUT = os.environ.get("PROXY_SUB_OUT", os.path.join(BASE, "out"))
+_def_cache = os.path.join(HOME, ".cache", "vpn-search") if os.path.exists(os.path.join(HOME, ".cache", "vpn-search")) else os.path.join(BASE, "cache")
+_def_out = os.path.join(HOME, "vpn_results") if os.path.exists(os.path.join(HOME, "vpn_results")) else os.path.join(BASE, "out")
+_def_secrets = os.path.join(HOME, ".hermes", "secrets") if os.path.exists(os.path.join(HOME, ".hermes", "secrets")) else os.path.join(BASE, "secrets")
+
+CACHE = os.environ.get("PROXY_SUB_CACHE", _def_cache)
+OUT = os.environ.get("PROXY_SUB_OUT", _def_out)
 SCRATCH = os.environ.get("PROXY_SUB_SCRATCH", os.path.join(BASE, "scratch"))
-SECRETS = os.environ.get("PROXY_SUB_SECRETS", os.path.join(BASE, "secrets"))
+SECRETS = os.environ.get("PROXY_SUB_SECRETS", _def_secrets)
 
 for _d in (BASE, CACHE, OUT, SCRATCH, SECRETS):
     os.makedirs(_d, exist_ok=True)
