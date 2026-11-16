@@ -92,6 +92,13 @@ SOURCES = {
     "barabara_cfmem":  "Barabama/FreeNodes/HEAD/nodes/cfmem.txt",
     "barabara_yudou":  "Barabama/FreeNodes/HEAD/nodes/yudou.txt",
     "au1rxx_trojan":"Au1rxx/free-vpn-subscriptions/main/output/protocol/trojan/v2ray-base64-0001.txt",
+    # Свежие активные репозитории-коллекторы (проверено 2026-11)
+    "tahmaseb_hy2":    "tahmaseb73/configs-collector-v2ray/main/data/sub/protocols/hysteria2.txt",
+    "tahmaseb_vless":  "tahmaseb73/configs-collector-v2ray/main/data/sub/protocols/vless.txt",
+    "tahmaseb_reality":"tahmaseb73/configs-collector-v2ray/main/data/sub/networks/reality.txt",
+    "tahmaseb_tuic":   "tahmaseb73/configs-collector-v2ray/main/data/sub/protocols/tuic.txt",
+    "shin_all":        "therealaleph/Shin-TG-V2ray-Collector/main/collected_configs.txt",
+    "mohamadfg_vless": "mohamadfg-dev/telegram-v2ray-configs-collector/main/category/vless.txt",
 }
 def daily_sources():
     """Свежие файлы каталогов-зеркал: node.<домен>/uploads/YYYY/MM/YYYYMMDD.txt.

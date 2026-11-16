@@ -23,6 +23,9 @@ import sys
 import time
 import urllib.request
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import paths
+
 CACHE_DIR = paths.CACHE
 DISCOVERED = os.path.join(CACHE_DIR, "tg_discovered.json")
 REJECTED = os.path.join(CACHE_DIR, "tg_rejected.json")   # проверены, конфигов нет
@@ -36,6 +39,13 @@ spec.loader.exec_module(tgs)
 
 LISTS = [
     ("Argh73/V2Ray-Vault", "data/Extract/telegram_channels.json"),
+    ("therealaleph/Shin-TG-V2ray-Collector", "telegram_channels.json"),
+    ("mohamadfg-dev/telegram-v2ray-configs-collector", "telegram_channels.json"),
+    ("tahmaseb73/configs-collector-v2ray", "data/telegram_channels.json"),
+    ("qweered/tg-proxy-parser", "telegram_channels.json"),
+    ("V2RayRoot/V2RayConfig", "telegram_channels.json"),
+    ("V2RayRoot/V2Root-ConfigPilot", "telegram_channels.json"),
+    ("Surfboardv2ray/TGParse", "telegramchannels.json"),
     ("CattMurr/FREE-VPN-VIA-PLANET", "telegram-channels.json"),
     ("3yed82/TVC", "channels.json"),
     ("vpnineh/TGC", "telegramchannels.json"),
@@ -98,19 +108,38 @@ def from_repos():
 
 
 def from_search():
+    import subprocess
     import urllib.parse
     chans = set()
+    # 1. Локальный SearXNG
     for q in SEARCH_QUERIES:
         url = "http://127.0.0.1:8180/search?" + urllib.parse.urlencode({"q": q, "format": "json", "pageno": 1})
         try:
-            d = json.loads(urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=25).read())
+            d = json.loads(urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=5).read())
+            for r in d.get("results", []):
+                m = re.search(r"t\.me/(?:s/)?([A-Za-z0-9_]{4,32})", r.get("url", ""))
+                if m:
+                    chans.add(m.group(1))
         except Exception:
-            continue
-        for r in d.get("results", []):
-            m = re.search(r"t\.me/(?:s/)?([A-Za-z0-9_]{4,32})", r.get("url", ""))
-            if m:
-                chans.add(m.group(1))
-    return chans
+            pass
+
+    # 2. GitHub Search (через gh CLI, если доступен)
+    try:
+        cmd = ["gh", "api", "search/code?q=t.me/s/+vless+extension:txt&per_page=10"]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if proc.returncode == 0:
+            res = json.loads(proc.stdout)
+            for item in res.get("items", []):
+                repo = item.get("repository", {}).get("full_name")
+                path = item.get("path")
+                if repo and path:
+                    content = raw(repo, path)
+                    for m in re.finditer(r"t\.me/(?:s/)?([A-Za-z0-9_]{4,32})", content):
+                        chans.add(m.group(1))
+    except Exception:
+        pass
+
+    return {c for c in chans if not any(w in c.lower() for w in STOP)}
 
 
 def main():

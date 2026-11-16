@@ -21,11 +21,12 @@
 
 `discover_channels.py` — где брать новые каналы:
 
-- списки из репозиториев (`Argh73/V2Ray-Vault`, `CattMurr/FREE-VPN-VIA-PLANET`,
-  `3yed82/TVC`, `vpnineh/TGC`, `chenweimin30-hue/-VPN` и подобные) — 594 канала,
-  462 новых, 130 с конфигами;
-- `--search` через SearXNG (`site:t.me`) — 10 запросов дают ~47 каналов, конфиги
-  у 6 %;
+- списки из 12 проверенных активных репозиториев (`Argh73/V2Ray-Vault`,
+  `therealaleph/Shin-TG-V2ray-Collector`, `mohamadfg-dev/telegram-v2ray-configs-collector`,
+  `tahmaseb73/configs-collector-v2ray`, `qweered/tg-proxy-parser`, `Surfboardv2ray/TGParse`,
+  `CattMurr/FREE-VPN-VIA-PLANET`, `3yed82/TVC`, `vpnineh/TGC`, `chenweimin30-hue/-VPN` и др.) —
+  более 1 400 уникальных каналов;
+- `--search` через SearXNG (`site:t.me`) и GitHub Code Search через `gh api`;
 - отклонённые каналы хранятся в `tg_rejected.json` с TTL 3 дня, чтобы не
   перепроверять пустые каждый цикл.
 
@@ -33,13 +34,19 @@
 
 - пагинация `?before=`, состояние в `tg_state.json`, 16 потоков, backoff 3–9 с;
 - понимает base64-блобы (в них бывает список ссылок целиком);
+- **Sub-in-Sub Harvester**: извлекает и скачивает внешние подписки из текста постов
+  (ссылки на raw GitHub, воркеры Cloudflare `workers.dev`, `/sub`, эндпоинты с `token=`),
+  кэшируя запросы в `tg_fetched_subs.json` с TTL 12 часов;
 - вынимает упоминания `t.me/...` и `@name` — из них появляются новые каналы;
-- статистика в `tg_stats.json` (`links`, `last_links`, `zero_runs`);
+- умный скоринг каналов при выборке: каналы с подтвержденным выходом живых нод
+  (`verified_alive`) опрашиваются первыми, затухающие каналы уходят в конец;
+- статистика в `tg_stats.json` (`links`, `last_links`, `zero_runs`, `verified_alive`);
 - канал с `zero_runs >= 6` уходит в отклонённые.
 
 `fast_pass.py` — быстрый проход каждые 3 часа по топ-15 каналам: первая страница
 с курсором, проверка `sb_verify` (таймаут 6 с, 16 потоков), публикация. Свежий
-конфиг проверяется через минуты, а не через часы.
+конфиг проверяется через минуты, а не через часы. Каналы, чьи ноды подтвердили
+живость, получают повышенный рейтинг `verified_alive`.
 
 ## Чего стоит каталог
 
