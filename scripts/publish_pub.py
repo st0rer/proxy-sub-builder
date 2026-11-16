@@ -168,7 +168,7 @@ def main():
         if use_gist and "403" in msg:
             print("  → токену не хватает прав на gist. Создай classic PAT со scope gist:")
             print("    https://github.com/settings/tokens/new?scopes=gist&description=hermes-sub-gist")
-            print("    затем: echo 'ghp_...' > $PROXY_SUB_HOME/secrets/gist_token && chmod 600 $PROXY_SUB_HOME/secrets/gist_token")
+            print("    затем: echo '<token>' > $PROXY_SUB_HOME/secrets/gist_token && chmod 600 $PROXY_SUB_HOME/secrets/gist_token")
         return 1
     print("подписка доступна:")
     for u in urls:
