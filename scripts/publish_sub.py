@@ -251,12 +251,21 @@ def main():
             "ssr": 15, "tuic": 15, "anytls": 10, "hysteria": 10}
     if os.environ.get("SUB_CAPS"):
         CAPS.update({k: int(v) for k, v in (x.split("=") for x in os.environ["SUB_CAPS"].split(","))})
+    # Потолок на панель: одинаковый ключ = один сервер с разными входными IP.
+    # Подписка, собранная из одной панели, умирает целиком вместе с ней.
+    MAX_PER_PANEL = int(os.environ.get("SUB_MAX_PER_PANEL", "3"))
+    panel_seen = {}
     fam = lambda l: "hy2" if is_hy2(l) else l.split("://")[0]
     kept, cnt = [], {}
     for l in links:
         f = fam(l)
         if cnt.get(f, 0) >= CAPS.get(f, 30):
             continue
+        pr = ffv.link_to_proxy(l, "x") or {}
+        pk = (f, str(pr.get("uuid") or pr.get("password") or pr.get("auth") or ""))
+        if pk[1] and panel_seen.get(pk, 0) >= MAX_PER_PANEL:
+            continue
+        panel_seen[pk] = panel_seen.get(pk, 0) + 1
         cnt[f] = cnt.get(f, 0) + 1
         kept.append(l)
     if len(kept) < len(links):

@@ -20,6 +20,9 @@ GIST_TOKEN_FILE = os.path.join(paths.SECRETS, "gist_token")
 
 
 def gh_token():
+    env = os.environ.get("GITHUB_TOKEN")
+    if env:
+        return env.strip()
     try:
         return subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, check=True).stdout.strip()
     except Exception:
@@ -160,16 +163,32 @@ def main():
         print("нет файлов подписки — сначала publish_sub.py")
         return 1
     use_gist = "--gist" in sys.argv
+    repo = os.environ.get("GITHUB_REPO", "")
+
+    def publish_once():
+        return to_gist() if use_gist else to_repo(repo)
+
     try:
-        urls = to_gist() if use_gist else to_repo(os.environ.get("GITHUB_REPO", ""))
+        urls = publish_once()
     except Exception as e:
         msg = str(e)
-        print(f"ошибка публикации: {msg}")
-        if use_gist and "403" in msg:
-            print("  → токену не хватает прав на gist. Создай classic PAT со scope gist:")
-            print("    https://github.com/settings/tokens/new?scopes=gist&description=hermes-sub-gist")
-            print("    затем: echo '<token>' > $PROXY_SUB_HOME/secrets/gist_token && chmod 600 $PROXY_SUB_HOME/secrets/gist_token")
-        return 1
+        # GitHub отдаёт 401 «Bad credentials» на валидный токен пачками. Второй
+        # токен (classic PAT из secrets/gist_token) обычно умеет и repo, и gist.
+        alt = gist_token()
+        if not use_gist and alt and ("401" in msg or "403" in msg):
+            print("repo: основной токен отбит, пробую второй")
+            os.environ["GITHUB_TOKEN"] = alt
+            try:
+                urls = publish_once()
+            except Exception as e2:
+                print(f"ошибка публикации: {e2}")
+                return 1
+        else:
+            print(f"ошибка публикации: {msg}")
+            if use_gist and "403" in msg:
+                print("  → токену не хватает прав на gist: нужен classic PAT со scope gist")
+                print("    echo '<token>' > $PROXY_SUB_HOME/secrets/gist_token && chmod 600 ...")
+            return 1
     print("подписка доступна:")
     for u in urls:
         print("  " + u)

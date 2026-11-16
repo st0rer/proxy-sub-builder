@@ -150,6 +150,12 @@ def build(links):
         ob = to_singbox(p, f"N{i}")
         if not ob:
             continue
+        # Один битый flow валит ВЕСЬ конфиг: sing-box пишет
+        # «initialize outbound[45]: unsupported flow: xtls-rprx-vision-udp443»
+        # и не стартует — прогон даёт 0 живых из любого числа нод.
+        flow = str(ob.get("flow") or "")
+        if flow and flow != "xtls-rprx-vision":
+            continue
         port = BASE_PORT + i
         inbounds.append({"type": "socks", "tag": f"in{i}", "listen": "127.0.0.1",
                          "listen_port": port})
