@@ -1,0 +1,9 @@
+[Unit]
+Description=Mobile subscription watchdog and freshness check
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.proxy-sub/env
+WorkingDirectory=%h/proxy-sub-builder
+ExecStart=/usr/bin/env bash %h/proxy-sub-builder/scripts/mobile_watch.sh
+TimeoutStartSec=300

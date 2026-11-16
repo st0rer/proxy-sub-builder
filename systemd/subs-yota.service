@@ -1,0 +1,11 @@
+[Unit]
+Description=Subscription refresh (mobile profile, checked from the operator network)
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.proxy-sub/env
+WorkingDirectory=%h/proxy-sub-builder
+ExecStart=/usr/bin/env bash %h/proxy-sub-builder/scripts/refresh_yota.sh
+TimeoutStartSec=3600
+Nice=10

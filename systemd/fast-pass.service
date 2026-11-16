@@ -1,0 +1,11 @@
+[Unit]
+Description=Fast pass over the freshest telegram posts
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.proxy-sub/env
+WorkingDirectory=%h/proxy-sub-builder
+ExecStart=/usr/bin/env python3 %h/proxy-sub-builder/scripts/fast_pass.py 15 150
+TimeoutStartSec=1800
+Nice=10

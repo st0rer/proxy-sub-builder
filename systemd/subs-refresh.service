@@ -1,0 +1,11 @@
+[Unit]
+Description=Subscription refresh (home profile)
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.proxy-sub/env
+WorkingDirectory=%h/proxy-sub-builder
+ExecStart=/usr/bin/env bash %h/proxy-sub-builder/scripts/refresh_subs.sh
+TimeoutStartSec=3600
+Nice=10

@@ -1,0 +1,10 @@
+[Unit]
+Description=Mobile subscription refresh three times a day
+
+[Timer]
+# Nodes live for hours; three runs keep max staleness at 8 h.
+OnCalendar=*-*-* 02,10,18:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

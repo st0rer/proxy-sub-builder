@@ -1,0 +1,9 @@
+[Unit]
+Description=Subscription refresh every 6 hours
+
+[Timer]
+OnCalendar=*-*-* 00/6:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

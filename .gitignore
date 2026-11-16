@@ -1,0 +1,14 @@
+# секреты и состояние — никогда в репозиторий
+.env
+secrets/
+*.session
+*_token
+cache/
+out/
+scratch/
+good/
+# python
+__pycache__/
+*.pyc
+# прочее
+.DS_Store
