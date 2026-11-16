@@ -167,11 +167,14 @@ def scan_channel(name, cursor, depth, fetched_subs=None):
     """Возвращает (ссылки, новый курсор, страниц, упомянутые каналы)."""
     links, seen_ids, pages, mentions = [], [], 0, set()
     before = None
+    first_status = None
     if fetched_subs is None:
         fetched_subs = {}
     while pages < depth:
         url = f"https://t.me/s/{name}" + (f"?before={before}" if before else "")
         html, _status = fetch(url)
+        if first_status is None:
+            first_status = _status
         pages += 1
         if not html:
             break
@@ -201,6 +204,8 @@ def scan_channel(name, cursor, depth, fetched_subs=None):
         seen_ids += new_ids
         before = min(ids) - 1
         time.sleep(random.uniform(0.05, 0.2))
+    if first_status == 404:
+        mentions.add("__404__")
     new_cursor = max(seen_ids) if seen_ids else cursor
     return links, new_cursor, pages, mentions
 
@@ -237,6 +242,10 @@ def main():
             st["links"] += len(links)
             st["last_links"] = len(links)          # урожай последнего прогона
             st["zero_runs"] = st["zero_runs"] + 1 if not links else 0
+            if "__404__" in mentions:
+                mentions.discard("__404__")
+                rejected[name] = now + 30 * 86400  # удаленный канал отсекаем на месяц
+                st["zero_runs"] = 999
             stats[name] = st
             if links:
                 all_links += links

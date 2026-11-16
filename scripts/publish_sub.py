@@ -100,6 +100,18 @@ def owned_links():
     return out
 
 
+def is_hy2(l):
+    """Определяет, относится ли ссылка к семейству Hysteria 2."""
+    return l.startswith(("hy2://", "hysteria2://", "hysteria://"))
+
+
+def cc_to_flag(cc):
+    """Преобразует двухбуквенный ISO-код страны в эмодзи-флаг."""
+    if cc and len(cc) == 2 and cc.isalpha():
+        return chr(0x1F1E6 + ord(cc[0].upper()) - ord('A')) + chr(0x1F1E6 + ord(cc[1].upper()) - ord('A'))
+    return ""
+
+
 def extra_links():
     """EXTRA_LINKS=<file> — добавить ноды из другого набора (например, прошлые
     проверенные vless, когда текущий прогон собран только по hy2).
@@ -220,8 +232,6 @@ def main():
             pass
     # hy2 первыми: на мобильных операторах (Yota/МегаФон) VLESS режут по отпечатку,
     # а QUIC живёт — клиенту нужен рабочий узел в начале списка, не самый быстрый vless.
-    def is_hy2(l):
-        return l.startswith(("hy2://", "hysteria2://", "hysteria://"))
     # ноды, которые отдали выходной IP, но нулевую скорость (0.0 МБ/с), — мусор:
     # соединение есть, трафика нет. Из проверенных такие выбрасываем, а незнакомые
     # (пришедшие через EXTRA_LINKS) оставляем — у них замера просто нет.
@@ -323,9 +333,39 @@ def main():
         awrite(os.path.join(OUT, "hy2_nodes.txt"), "\n".join(hy2_only) + "\n")
         awrite(os.path.join(OUT, "hy2.txt"), base64.b64encode("\n".join(hy2_only).encode()).decode())
 
+    # протокольные разделы: VLESS, Reality, Shadowsocks
+    vless_only = [l for l in links if l.startswith("vless://")]
+    if vless_only:
+        awrite(os.path.join(OUT, "vless_nodes.txt"), "\n".join(vless_only) + "\n")
+        awrite(os.path.join(OUT, "vless.txt"), base64.b64encode("\n".join(vless_only).encode()).decode())
+
+    reality_only = [l for l in vless_only if "pbk=" in l or "security=reality" in l]
+    if reality_only:
+        awrite(os.path.join(OUT, "reality_nodes.txt"), "\n".join(reality_only) + "\n")
+        awrite(os.path.join(OUT, "reality.txt"), base64.b64encode("\n".join(reality_only).encode()).decode())
+
+    ss_only = [l for l in links if l.startswith("ss://")]
+    if ss_only:
+        awrite(os.path.join(OUT, "ss_nodes.txt"), "\n".join(ss_only) + "\n")
+        awrite(os.path.join(OUT, "ss.txt"), base64.b64encode("\n".join(ss_only).encode()).decode())
+
+    cc_map = {}
+    try:
+        vf_file = os.path.join(CACHE, "verified.json")
+        if os.path.exists(vf_file):
+            for v in json.load(open(vf_file)):
+                if isinstance(v, dict) and v.get("link") and v.get("cc"):
+                    cc_map[v["link"]] = v["cc"].strip().upper()
+    except Exception:
+        pass
+
     proxies = []
     for i, l in enumerate(links):
-        p = ffv.link_to_proxy(l, f"node-{i + 1:02d}-{l.split('://')[0]}")
+        proto = l.split("://")[0]
+        cc = cc_map.get(l, "")
+        flag = cc_to_flag(cc)
+        name = f"{flag} {cc} {i + 1:02d} [{proto}]" if flag else f"node-{i + 1:02d}-{proto}"
+        p = ffv.link_to_proxy(l, name)
         p = sa.sanitize_proxy(p) if p else None   # иначе одна битая нода ломает clash.yaml целиком
         if p:
             p["port"] = int(p["port"])
@@ -360,11 +400,19 @@ def main():
              "  - MATCH,FALLBACK"]
     awrite(os.path.join(OUT, "clash.yaml"), "\n".join(body) + "\n")
 
+    pub_files = ["nodes.txt", "v2ray.txt", "clash.yaml", "hy2_nodes.txt", "hy2.txt"]
+    if vless_only: pub_files += ["vless_nodes.txt", "vless.txt"]
+    if reality_only: pub_files += ["reality_nodes.txt", "reality.txt"]
+    if ss_only: pub_files += ["ss_nodes.txt", "ss.txt"]
+
     awrite(os.path.join(OUT, "index.json"), json.dumps(
         {"updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
          "count": len(links),
          "unique_connections": len({conn_id(l) for l in links}),
-         "files": ["nodes.txt", "v2ray.txt", "clash.yaml", "hy2_nodes.txt", "hy2.txt"],
+         "files": pub_files,
+         "vless_count": len(vless_only),
+         "reality_count": len(reality_only),
+         "ss_count": len(ss_only),
          "hy2_count": len(hy2_only)}, indent=1))
     print(f"опубликовано {len(links)} нод -> {OUT}")
     return 0

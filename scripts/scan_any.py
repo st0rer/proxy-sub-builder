@@ -118,6 +118,22 @@ def daily_sources():
     return out
 
 
+def dynamic_community_sources():
+    """Динамические источники подписок из проверенных репозиториев сообщества."""
+    out = {}
+    try:
+        url = "https://raw.githubusercontent.com/tahmaseb73/configs-collector-v2ray/main/data/sub_link.json"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            links = json.loads(r.read().decode("utf-8", "ignore"))
+            for i, l in enumerate(links[:30]):
+                if isinstance(l, str) and l.startswith("http"):
+                    out[f"dyn_tahmaseb_{i:02d}"] = l
+    except Exception:
+        pass
+    return out
+
+
 RAW_BASE = "https://raw.githubusercontent.com/"
 
 sys.path.insert(0, paths.SCRIPT_DIR)
@@ -262,7 +278,7 @@ def collect():
     os.makedirs(RAW, exist_ok=True)
     os.makedirs(CACHE, exist_ok=True)
     links = set()
-    for name, path in list(SOURCES.items()) + list(daily_sources().items()):
+    for name, path in list(SOURCES.items()) + list(daily_sources().items()) + list(dynamic_community_sources().items()):
         try:
             # в SOURCES встречаются и относительные пути (клеим к RAW_BASE),
             # и готовые URL (файлы каталогов по дате) — вторые не трогаем
