@@ -1,0 +1,28 @@
+config sb-client 'main'
+	option enabled '1'
+	# Основной URL подписки (v2ray.txt base64 или nodes.txt)
+	option sub_url 'https://raw.githubusercontent.com/st0rer/proxy-sub/main/v2ray.txt'
+	# Резервный URL (например локальный N100: http://192.168.1.100:8899/yota.txt)
+	option fallback_url ''
+
+	# Параметры TUN интерфейса
+	option tun_dev 'sb0'
+	option tun_mtu '1200'
+	option tun_addr '172.19.0.1/30'
+	option routing_table 'pbr_sbtun'
+	option table_id '200'
+
+	# Фильтрация нод
+	option exclude_cc 'RU'
+	option require_gemini '1'
+	option strict_mode '1'
+	option min_nodes '4'
+
+	# Фоновые службы
+	option auto_refresh '1'
+	option refresh_cron '17 5 * * *'
+	option cf_watchdog '1'
+	option watchdog_cron '*/15 * * * *'
+
+	# Своя Cloudflare-нода (опционально)
+	option cf_node_file '/etc/sing-box/cf_node.json'

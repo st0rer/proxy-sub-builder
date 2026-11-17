@@ -1,0 +1,116 @@
+#!/bin/sh /etc/rc.common
+
+START=95
+STOP=10
+USE_PROCD=1
+
+CONF="sb-client"
+PROG="/usr/bin/sing-box"
+CFG_FILE="/etc/sing-box/config.json"
+CRON_FILE="/etc/crontabs/root"
+
+load_uci() {
+	config_load "$CONF"
+	config_get_bool ENABLED "main" "enabled" 0
+	config_get SUB_URL "main" "sub_url" "https://raw.githubusercontent.com/st0rer/proxy-sub/main/v2ray.txt"
+	config_get FALLBACK_URL "main" "fallback_url" ""
+	config_get TUN_DEV "main" "tun_dev" "sb0"
+	config_get TUN_MTU "main" "tun_mtu" "1200"
+	config_get TUN_ADDR "main" "tun_addr" "172.19.0.1/30"
+	config_get TABLE_NAME "main" "routing_table" "pbr_sbtun"
+	config_get TABLE_ID "main" "table_id" "200"
+	config_get_bool AUTO_REFRESH "main" "auto_refresh" 1
+	config_get REFRESH_CRON "main" "refresh_cron" "17 5 * * *"
+	config_get_bool CF_WATCHDOG "main" "cf_watchdog" 1
+	config_get WATCHDOG_CRON "main" "watchdog_cron" "*/15 * * * *"
+}
+
+setup_rt_tables() {
+	if [ -f /etc/iproute2/rt_tables ]; then
+		if ! grep -q "[[:space:]]${TABLE_NAME}$" /etc/iproute2/rt_tables; then
+			echo "${TABLE_ID} ${TABLE_NAME}" >> /etc/iproute2/rt_tables
+		fi
+	fi
+}
+
+setup_cron() {
+	mkdir -p /etc/crontabs
+	touch "$CRON_FILE"
+	sed -i '/sb-refresh/d' "$CRON_FILE"
+	sed -i '/cf-watchdog/d' "$CRON_FILE"
+
+	if [ "$AUTO_REFRESH" -eq 1 ]; then
+		echo "$REFRESH_CRON /usr/bin/sb-refresh >/dev/null 2>&1" >> "$CRON_FILE"
+	fi
+	if [ "$CF_WATCHDOG" -eq 1 ]; then
+		echo "$WATCHDOG_CRON /usr/bin/cf-watchdog >/dev/null 2>&1" >> "$CRON_FILE"
+	fi
+	/etc/init.d/cron restart 2>/dev/null || true
+}
+
+start_service() {
+	load_uci
+	[ "$ENABLED" -eq 1 ] || return 0
+
+	setup_rt_tables
+	setup_cron
+
+	# Если конфига еще нет — первоначальный запуск генерации
+	if [ ! -s "$CFG_FILE" ]; then
+		echo "Конфиг sing-box отсутствует, запускаю начальное обновление..."
+		/usr/bin/sb-refresh --initial || true
+	fi
+
+	if [ ! -s "$CFG_FILE" ]; then
+		echo "Ошибка: не удалось сформировать $CFG_FILE"
+		return 1
+	fi
+
+	# Проверка валидности конфига перед запуском
+	if ! "$PROG" check -c "$CFG_FILE" >/dev/null 2>&1; then
+		echo "Ошибка: $CFG_FILE не прошел проверку sing-box check"
+		return 1
+	fi
+
+	procd_open_instance "singbox-sub-client"
+	procd_set_param command "$PROG" run -c "$CFG_FILE"
+	procd_set_param respawn 3600 5 5
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param file "$CFG_FILE"
+	procd_close_instance
+}
+
+service_started() {
+	load_uci
+	sleep 2
+	# Оптимизация rp_filter (0 = выключить строгий reverse-path filter для tun)
+	if [ -d "/proc/sys/net/ipv4/conf/${TUN_DEV}" ]; then
+		sysctl -w "net.ipv4.conf.${TUN_DEV}.rp_filter=0" >/dev/null 2>&1 || true
+	fi
+	sysctl -w net.ipv4.conf.default.rp_filter=2 >/dev/null 2>&1 || true
+
+	# Применяем маршрут по умолчанию в таблицу PBR
+	ip route replace default dev "$TUN_DEV" table "$TABLE_NAME" 2>/dev/null || true
+}
+
+stop_service() {
+	load_uci
+	ip route flush table "$TABLE_NAME" 2>/dev/null || true
+	sed -i '/sb-refresh/d' "$CRON_FILE" 2>/dev/null || true
+	sed -i '/cf-watchdog/d' "$CRON_FILE" 2>/dev/null || true
+	/etc/init.d/cron restart 2>/dev/null || true
+}
+
+reload_service() {
+	load_uci
+	if "$PROG" check -c "$CFG_FILE" >/dev/null 2>&1; then
+		procd_send_signal "singbox-sub-client" "*" SIGHUP 2>/dev/null || restart
+	else
+		echo "Конфиг не прошел валидацию, отказ перезагрузки"
+	fi
+}
+
+refresh() {
+	/usr/bin/sb-refresh "$@"
+}

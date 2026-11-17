@@ -1,0 +1,24 @@
+#!/bin/sh
+# Hotplug-обработчик для tun-интерфейса sing-box (sb0)
+# Автоматически восстанавливает маршрут в таблице PBR и сбрасывает rp_filter
+
+[ "$INTERFACE" = "sb0" ] || [ "$DEVICE" = "sb0" ] || exit 0
+
+case "$ACTION" in
+	ifup|add)
+		# 1. Отключаем строгую фильтрацию обратного пути для туннеля
+		sysctl -w net.ipv4.conf.sb0.rp_filter=0 >/dev/null 2>&1 || true
+		sysctl -w net.ipv4.conf.default.rp_filter=2 >/dev/null 2>&1 || true
+
+		# 2. Выставляем безопасный MTU 1200 против фрагментации пакетов TLS/QUIC
+		ip link set dev sb0 mtu 1200 2>/dev/null || true
+
+		# 3. Восстанавливаем маршрут по умолчанию в PBR-таблицу sbtun
+		TABLE=$(uci -q get sb-client.main.routing_table || echo "pbr_sbtun")
+		ip route replace default dev sb0 table "$TABLE" 2>/dev/null || true
+		;;
+	ifdown|remove)
+		TABLE=$(uci -q get sb-client.main.routing_table || echo "pbr_sbtun")
+		ip route flush table "$TABLE" 2>/dev/null || true
+		;;
+esac

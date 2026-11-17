@@ -1,0 +1,106 @@
+#!/bin/sh
+# S99singbox-client — Entware init daemon for KeeneticOS 5
+ENABLED=yes
+PROCS=sing-box
+ARGS="run -c /opt/etc/sing-box/config.json"
+PREARGS=""
+DESC="Sing-Box Subscription Client"
+PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+CONF="/opt/etc/singbox-client/singbox-client.conf"
+CRON_FILE="/opt/etc/crontab"
+
+[ -f "$CONF" ] && . "$CONF"
+
+setup_cron() {
+	[ -f "$CRON_FILE" ] || touch "$CRON_FILE"
+	sed -i '/sb-refresh/d' "$CRON_FILE"
+	sed -i '/cf-watchdog/d' "$CRON_FILE"
+
+	if [ "${AUTO_REFRESH:-1}" = "1" ]; then
+		echo "${REFRESH_CRON:-17 5 * * *} root /opt/bin/sb-refresh >/dev/null 2>&1" >> "$CRON_FILE"
+	fi
+	if [ "${CF_WATCHDOG:-1}" = "1" ]; then
+		echo "${WATCHDOG_CRON:-*/15 * * * *} root /opt/bin/cf-watchdog >/dev/null 2>&1" >> "$CRON_FILE"
+	fi
+	if [ -x /opt/etc/init.d/S10cron ]; then
+		/opt/etc/init.d/S10cron restart >/dev/null 2>&1 || true
+	fi
+}
+
+start() {
+	echo -n "Starting $DESC: "
+	if pgrep -f "$PROCS $ARGS" >/dev/null 2>&1; then
+		echo "already running."
+		return 0
+	fi
+
+	# Если конфига еще нет — первоначальная генерация
+	if [ ! -s /opt/etc/sing-box/config.json ]; then
+		echo "generating initial config..."
+		/opt/bin/sb-refresh --initial || true
+	fi
+
+	if [ ! -s /opt/etc/sing-box/config.json ]; then
+		echo "FAILED (no config.json)"
+		return 1
+	fi
+
+	# Валидация
+	if ! /opt/bin/sing-box check -c /opt/etc/sing-box/config.json >/dev/null 2>&1; then
+		echo "FAILED (config check failed)"
+		return 1
+	fi
+
+	setup_cron
+
+	# Запуск в фоне
+	/opt/bin/sing-box $ARGS >/opt/var/log/sing-box.log 2>&1 &
+	sleep 2
+
+	# Применение сетевых хуков
+	/opt/etc/ndm/netfilter.d/100-singbox.sh >/dev/null 2>&1 || true
+
+	echo "OK."
+}
+
+stop() {
+	echo -n "Stopping $DESC: "
+	killall sing-box 2>/dev/null || true
+	sed -i '/sb-refresh/d' "$CRON_FILE" 2>/dev/null || true
+	sed -i '/cf-watchdog/d' "$CRON_FILE" 2>/dev/null || true
+	echo "OK."
+}
+
+restart() {
+	stop
+	sleep 1
+	start
+}
+
+status() {
+	if pgrep -f "$PROCS $ARGS" >/dev/null 2>&1; then
+		echo "$DESC is running (PID: $(pgrep -f "$PROCS $ARGS" | tr '\n' ' '))"
+	else
+		echo "$DESC is stopped"
+	fi
+}
+
+check() {
+	/opt/bin/sing-box check -c /opt/etc/sing-box/config.json
+}
+
+refresh() {
+	/opt/bin/sb-refresh "$@"
+}
+
+case "$1" in
+	start) start ;;
+	stop) stop ;;
+	restart) restart ;;
+	status) status ;;
+	check) check ;;
+	refresh) refresh ;;
+	*) echo "Usage: $0 {start|stop|restart|status|check|refresh}" ; exit 1 ;;
+esac
+exit 0

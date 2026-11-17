@@ -8,9 +8,6 @@
 """
 import base64, json, os, sys, urllib.parse as up
 
-SRC = os.environ.get("SINGBOX_SOURCE", "/tmp/ps_nodes.txt")
-OUT = os.environ.get("SINGBOX_CONFIG", "/tmp/sb-config.json")
-
 # РФ исключаем всегда: для обхода бесполезно, а Google/Gemini отдают геоблок
 DEFAULT_EXCLUDE = {"RU"}
 
@@ -84,7 +81,8 @@ def parse_ss(u):
 
 
 def load_lines(path):
-    raw = open(path, encoding="utf-8", errors="ignore").read()
+    with open(path, encoding="utf-8", errors="ignore") as f:
+        raw = f.read()
     if "://" not in raw.strip()[:200]:
         raw = base64.b64decode(raw + "=" * (-len(raw.strip()) % 4)).decode("utf-8", "ignore")
     return [l.strip() for l in raw.splitlines() if l.strip()]
@@ -107,6 +105,8 @@ def sni_score(ob):
 
 
 def main():
+    src_path = os.environ.get("SINGBOX_SOURCE", "/tmp/ps_nodes.txt")
+    out_path = os.environ.get("SINGBOX_CONFIG", "/tmp/sb-config.json")
     args = sys.argv[1:]
     geo_path, strict, exclude, req_gemini = None, False, set(DEFAULT_EXCLUDE), False
     for i, a in enumerate(args):
@@ -121,11 +121,12 @@ def main():
 
     geo = {}
     if geo_path and os.path.exists(geo_path):
-        geo = json.load(open(geo_path))
+        with open(geo_path, encoding="utf-8") as f:
+            geo = json.load(f)
 
     out, tags, by_key = [], [], {}
     dropped = {"dup": 0, "geo": 0, "dead": 0, "parse": 0, "gemini": 0}
-    for line in load_lines(SRC):
+    for line in load_lines(src_path):
         scheme = line.split("://", 1)[0].lower()
         try:
             if scheme == "vless":
@@ -210,14 +211,32 @@ def main():
         "ssl.gstatic.com",
     ]
 
+    tun_dev = os.environ.get("SINGBOX_TUN_DEV", "sb0")
+    tun_addr = os.environ.get("SINGBOX_TUN_ADDR", "172.19.0.1/30")
+    tun_mtu = int(os.environ.get("SINGBOX_TUN_MTU", "1200"))
+    mode = os.environ.get("SINGBOX_MODE", "tun").lower()
+
+    inbounds = [
+        {"type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080},
+    ]
+    if mode in ("tun", "mixed"):
+        inbounds.append({
+            "type": "tun", "tag": "tun-in", "interface_name": tun_dev,
+            "address": [tun_addr], "mtu": tun_mtu,
+            "auto_route": False, "strict_route": False, "stack": "gvisor"
+        })
+    if mode in ("tproxy", "mixed"):
+        inbounds.append({
+            "type": "tproxy", "tag": "tproxy-in", "listen": "::",
+            "listen_port": int(os.environ.get("SINGBOX_TPROXY_PORT", "12345")),
+            "sniff": True
+        })
+
+    sniff_inbounds = [i["tag"] for i in inbounds if i["type"] in ("tun", "tproxy")]
+
     cfg = {
         "log": {"level": "warn", "timestamp": True},
-        "inbounds": [
-            {"type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080},
-            {"type": "tun", "tag": "tun-in", "interface_name": "sb0",
-             "address": ["172.19.0.1/30"], "mtu": 1200,
-             "auto_route": False, "strict_route": False, "stack": "gvisor"},
-        ],
+        "inbounds": inbounds,
         "outbounds": own + out + [
             {"type": "urltest", "tag": "auto", "outbounds": tags,
              "url": "https://www.gstatic.com/generate_204",
@@ -232,7 +251,7 @@ def main():
         "route": {
             "rules": [
                 # без sniff правила по домену не сработают: из tun приходит только IP
-                {"inbound": ["tun-in"], "action": "sniff"},
+                {"inbound": sniff_inbounds, "action": "sniff"},
                 # исключения идут ПЕРВЫМИ: в правилах побеждает первое совпадение
                 {"domain_suffix": GCP_BYPASS, "outbound": "proxy"},
                 {"domain_suffix": GCP_DOMAINS, "outbound": "gcp"},
@@ -242,9 +261,10 @@ def main():
         },
         "experimental": {"clash_api": {"external_controller": "127.0.0.1:9090"}},
     }
-    json.dump(cfg, open(OUT, "w"), indent=2)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
     print(f"nodes: {len(out)} ({', '.join(sorted({o['type'] for o in out}))})"
-          f"{' + own: ' + ','.join(o['tag'] for o in own) if own else ''} -> {OUT}")
+          f"{' + own: ' + ','.join(o['tag'] for o in own) if own else ''} -> {out_path}")
     print(f"google-set -> gcp ({len(GCP_DOMAINS)} доменов), "
           f"фон Google минус воркер ({len(GCP_BYPASS)}), остальное -> proxy(auto)")
     print(f"dropped: dup={dropped['dup']} geo={dropped['geo']} dead={dropped['dead']} "

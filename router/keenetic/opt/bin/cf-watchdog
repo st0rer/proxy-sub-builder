@@ -1,0 +1,46 @@
+#!/bin/sh
+# cf-watchdog — сторож Cloudflare-ноды для KeeneticOS 5
+set -eu
+
+API="http://127.0.0.1:9090"
+LOG="/opt/var/log/cf-watchdog.log"
+PROBE_URL="https://www.gstatic.com/generate_204"
+CF_TAG="cf"
+GCP_SELECTOR="gcp"
+
+log() { echo "[$(date -u +%F' '%T) UTC] $*" >> "$LOG"; }
+
+if ! pgrep -f "sing-box run" >/dev/null 2>&1; then
+	exit 0
+fi
+
+CF_EXISTS=$(/opt/bin/curl -s -m 4 "$API/proxies/$CF_TAG" 2>/dev/null | grep -c '"name":"cf"' || echo 0)
+if [ "$CF_EXISTS" -eq 0 ]; then
+	exit 0
+fi
+
+now=$(/opt/bin/curl -s -m 4 "$API/proxies/$GCP_SELECTOR" 2>/dev/null | grep -o '"now":"[^"]*"' | cut -d'"' -f4 || echo "")
+delay=$(/opt/bin/curl -s -m 10 "$API/proxies/$CF_TAG/delay?timeout=7000&url=$PROBE_URL" 2>/dev/null | grep -o '"delay":[0-9]*' | cut -d':' -f2 || echo "0")
+
+switch() {
+	target="$1"
+	code=$(/opt/bin/curl -s -o /dev/null -w '%{http_code}' -m 4 -X PUT \
+	       -H 'Content-Type: application/json' -d "{\"name\":\"$target\"}" "$API/proxies/$GCP_SELECTOR" 2>/dev/null || echo "000")
+	if [ "$code" = "204" ]; then
+		log "gcp переключен -> $target (было: $now)"
+	else
+		log "Ошибка переключения gcp -> $target: HTTP $code"
+	fi
+}
+
+if [ -z "$delay" ] || [ "$delay" -eq 0 ]; then
+	if [ "$now" != "auto" ]; then
+		log "cf не отвечает, переключаю gcp на пул auto"
+		switch auto
+	fi
+else
+	if [ "$now" != "$CF_TAG" ]; then
+		log "cf доступен (${delay}мс), возвращаю gcp на cf"
+		switch "$CF_TAG"
+	fi
+fi

@@ -1,0 +1,154 @@
+#!/bin/sh
+# sb-refresh — автономное обновление подписки sing-box для KeeneticOS 5 (Entware)
+set -eu
+
+CONF="/opt/etc/singbox-client/singbox-client.conf"
+[ -f "$CONF" ] && . "$CONF"
+
+CFG_TARGET="/opt/etc/sing-box/config.json"
+SCRATCH="/opt/tmp/sb-client"
+SRC="$SCRATCH/sub_nodes.txt"
+FULL_CFG="$SCRATCH/sb-full.json"
+FILTERED_CFG="$SCRATCH/sb-filtered.json"
+GEO_FILE="$SCRATCH/sb-geo.json"
+
+mkdir -p "$SCRATCH" /opt/etc/sing-box /opt/var/log
+
+log() { echo "[$(date -u +%F' '%T) UTC] [sb-refresh-keenetic] $*"; }
+
+SUB_URL="${SUB_URL:-https://raw.githubusercontent.com/st0rer/proxy-sub/main/v2ray.txt}"
+FALLBACK_URL="${FALLBACK_URL:-}"
+EXCLUDE_CC="${EXCLUDE_CC:-RU}"
+REQ_GEMINI="${REQUIRE_GEMINI:-1}"
+STRICT="${STRICT_MODE:-1}"
+MIN_NODES="${MIN_NODES:-4}"
+TUN_DEV="${TUN_DEV:-sb0}"
+TUN_MTU="${TUN_MTU:-1200}"
+TUN_ADDR="${TUN_ADDR:-172.19.0.1/30}"
+MODE="${MODE:-tun}"
+CF_NODE_FILE="${CF_NODE_FILE:-/opt/etc/sing-box/cf_node.json}"
+
+INITIAL=0
+[ "${1:-}" = "--initial" ] && INITIAL=1
+
+log "Начало обновления подписки..."
+
+DOWNLOAD_OK=0
+if /opt/bin/curl -sf -m 30 -o "$SRC" "$SUB_URL"; then
+	[ -s "$SRC" ] && DOWNLOAD_OK=1
+fi
+
+if [ "$DOWNLOAD_OK" -eq 0 ] && [ -n "$FALLBACK_URL" ]; then
+	log "Основной URL недоступен, пробую fallback..."
+	if /opt/bin/curl -sf -m 30 -o "$SRC" "$FALLBACK_URL"; then
+		[ -s "$SRC" ] && DOWNLOAD_OK=1
+	fi
+fi
+
+if [ "$DOWNLOAD_OK" -eq 0 ]; then
+	log "ОШИБКА: Не удалось скачать подписку, текущий конфиг не тронут"
+	exit 1
+fi
+
+# 1. Генерация полного конфигурационного файла
+export SINGBOX_SOURCE="$SRC"
+export SINGBOX_CONFIG="$FULL_CFG"
+export SINGBOX_CF_NODE="$CF_NODE_FILE"
+export SINGBOX_TUN_DEV="$TUN_DEV"
+export SINGBOX_TUN_MTU="$TUN_MTU"
+export SINGBOX_TUN_ADDR="$TUN_ADDR"
+export SINGBOX_MODE="$MODE"
+
+/opt/bin/python3 /opt/bin/sbgen.py >/dev/null
+
+if ! /opt/bin/sing-box check -c "$FULL_CFG" >/dev/null 2>&1; then
+	log "ОШИБКА: Сгенерированный конфиг не прошел проверку sing-box check"
+	exit 1
+fi
+
+if [ "$INITIAL" -eq 1 ] || ! pgrep -f "sing-box run" >/dev/null 2>&1; then
+	log "Начальная установка: применяю полный конфиг..."
+	cp "$FULL_CFG" "$CFG_TARGET"
+	exit 0
+fi
+
+# 2. Замер выхода нод через локальный socks (127.0.0.1:1080) и clash_api (:9090)
+log "Замер стран выхода и доступности Gemini по нодам..."
+
+/opt/bin/python3 - "$FULL_CFG" "$GEO_FILE" << 'PY'
+import json, os, subprocess, sys
+
+full_path = sys.argv[1]
+geo_path = sys.argv[2]
+cfg = json.load(open(full_path))
+nodes = [o for o in cfg.get('outbounds', []) if o.get('server')]
+geo = {}
+
+for n in nodes:
+    tag = n['tag']
+    key = f"{n['type']}|{n['server']}|{n['server_port']}"
+
+    # Переключаем селектор proxy
+    sw = subprocess.run(['/opt/bin/curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', '-m', '4', '-X', 'PUT',
+                         '-H', 'Content-Type: application/json', '-d', json.dumps({'name': tag}),
+                         'http://127.0.0.1:9090/proxies/proxy'],
+                        capture_output=True, text=True).stdout.strip()
+    if sw != '204':
+        geo[key] = {'cc': '', 'err': 'switch_failed'}
+        continue
+
+    # Замер страны выхода
+    body = subprocess.run(['/opt/bin/curl', '-s', '-m', '6', '--socks5-hostname', '127.0.0.1:1080',
+                           'http://ip-api.com/json/?fields=status,countryCode,isp,query'],
+                          capture_output=True, text=True).stdout
+    try:
+        d = json.loads(body)
+        geo[key] = {'cc': (d.get('countryCode') or '').upper(),
+                    'isp': d.get('isp') or '', 'ip': d.get('query') or ''}
+    except Exception:
+        geo[key] = {'cc': '', 'err': 'timeout'}
+        continue
+
+    # Замер Gemini
+    hdr = subprocess.run(['/opt/bin/curl', '-s', '-m', '8', '--socks5-hostname', '127.0.0.1:1080',
+                          '-D', '-', '-o', '/dev/null', 'https://gemini.google.com/app'],
+                         capture_output=True, text=True).stdout
+    code, loc = '', ''
+    for line in hdr.splitlines():
+        if line.startswith('HTTP/'):
+            p = line.split()
+            if len(p) > 1: code = p[1]
+        elif line.lower().startswith('location:'):
+            loc = line.split(':', 1)[1].strip()
+
+    geo[key]['gemini'] = 'ok' if code == '200' else ('sorry' if 'sorry' in loc else (code or 'no_resp'))
+
+json.dump(geo, open(geo_path, 'w'), indent=1, ensure_ascii=False)
+PY
+
+# 3. Фильтрация
+log "Генерация отфильтрованного конфига..."
+ARGS="--geo $GEO_FILE --exclude $EXCLUDE_CC"
+[ "$STRICT" = "1" ] && ARGS="$ARGS --strict"
+[ "$REQ_GEMINI" = "1" ] && ARGS="$ARGS --require-gemini"
+
+export SINGBOX_CONFIG="$FILTERED_CFG"
+# shellcheck disable=SC2086
+/opt/bin/python3 /opt/bin/sbgen.py $ARGS >/dev/null
+
+COUNT=$(/opt/bin/python3 -c 'import json; c=json.load(open("'$FILTERED_CFG'")); print(sum(1 for o in c.get("outbounds",[]) if o.get("server") and o.get("tag") != "cf"))' 2>/dev/null || echo 0)
+log "Живых нод после фильтрации: $COUNT"
+
+if [ "$COUNT" -lt "$MIN_NODES" ]; then
+	log "ПРЕДУПРЕЖДЕНИЕ: Слишком мало нод ($COUNT < $MIN_NODES), оставляю прежний конфиг"
+	exit 1
+fi
+
+if ! /opt/bin/sing-box check -c "$FILTERED_CFG" >/dev/null 2>&1; then
+	log "ОШИБКА: Отфильтрованный конфиг не валиден"
+	exit 1
+fi
+
+mv "$FILTERED_CFG" "$CFG_TARGET"
+/opt/etc/init.d/S99singbox-client restart >/dev/null 2>&1 || true
+log "Обновление подписки на Keenetic завершено успешно!"

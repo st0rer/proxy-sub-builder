@@ -38,9 +38,24 @@ scripts/
   paths.py             единственное место с путями (всё через переменные окружения)
   lib/env.sh           то же для bash-обвязки
 docs/                  архитектура, конвейер, фильтры, публикация, роутер, подводные камни
+router/                клиентские пакеты для домашних роутеров (OpenWrt и KeeneticOS 5)
 systemd/               юниты и таймеры
 env.example            все переменные с пояснениями
 ```
+
+## Клиентские пакеты для роутеров (OpenWrt и KeeneticOS 5)
+
+В репозитории подготовлены автономные клиентские пакеты, превращающие готовую подписку в отказоустойчивый обход блокировок на роутере:
+
+* **OpenWrt (21.02 / 22.03 / 23.05 / 24+):**
+  * Сборка пакета `.ipk`/`.apk` через buildroot (`router/openwrt/Makefile`).
+  * Быстрая установка в одну команду: `curl -sSL .../router/openwrt/install-openwrt.sh | sh`
+  * Подробная инструкция: [docs/openwrt-package.md](docs/openwrt-package.md).
+* **KeeneticOS 5 (Entware):**
+  * Полная совместимость со средой Entware на USB или внутренней памяти (UBIFS).
+  * Интеграция с NDM-фаерволом (`/opt/etc/ndm/netfilter.d/`) для защиты маршрутов от сброса.
+  * Установка в одну команду: `curl -sSL .../router/keenetic/install.sh | sh`
+  * Подробная инструкция: [docs/keenetic-package.md](docs/keenetic-package.md).
 
 ## Два независимых профиля подписки
 
