@@ -9,3 +9,6 @@ WorkingDirectory=%h/proxy-sub-builder
 ExecStart=/usr/bin/env bash %h/proxy-sub-builder/scripts/refresh_subs.sh
 TimeoutStartSec=3600
 Nice=10
+MemoryMax=2G
+MemoryHigh=1.5G
+CPUWeight=50

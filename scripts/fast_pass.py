@@ -47,8 +47,16 @@ def save(path, data):
 
 def top_channels(limit):
     stats = load(os.path.join(CACHE, "tg_stats.json"), {})
-    rows = [(n, v.get("last_links", v.get("links", 0))) for n, v in stats.items()
-            if v.get("links", 0) > 0 and v.get("zero_runs", 0) < 3]
+    rows = []
+    for n, v in stats.items():
+        if v.get("zero_runs", 0) >= 3:
+            continue
+        # Подтвержденные живые ноды дают максимальный приоритет
+        alive = v.get("verified_alive", 0)
+        recent = min(v.get("last_links", v.get("links", 0)), 50)
+        score = (alive * 50) + recent
+        if score > 0:
+            rows.append((n, score))
     rows.sort(key=lambda kv: -kv[1])
     return [n for n, _ in rows[:limit]]
 
@@ -60,6 +68,7 @@ def fresh_links(channels):
     published = {l.strip() for l in open(os.path.join(SUB_DIR, "nodes.txt")) if l.strip()} \
         if os.path.exists(os.path.join(SUB_DIR, "nodes.txt")) else set()
     out, scanned = [], 0
+    link_origins = {}
     web = os.path.join(CACHE, "web_links.txt")
     have = {l.strip() for l in open(web)} if os.path.exists(web) else set()
     for name in channels:
@@ -68,6 +77,7 @@ def fresh_links(channels):
         if cursor is not None:
             state[name] = cursor
         for l in dict.fromkeys(links):
+            link_origins[l] = name
             if l in tested or l in alive or l in published:
                 continue
             out.append(l)
@@ -79,7 +89,7 @@ def fresh_links(channels):
             for l in dict.fromkeys(out):
                 f.write(l + "\n")
     tgs.save(os.path.join(CACHE, "tg_state.json"), state)
-    return out, scanned
+    return out, scanned, link_origins
 
 
 VERIFIABLE = ("vless://", "vmess://", "trojan://", "ss://", "anytls://", "tuic://",
@@ -90,7 +100,7 @@ def verify(links, limit):
     # фильтр до обрезки по лимиту: иначе первые N могут оказаться ssr/hysteria v1,
     # которые ядро не умеет, и прогон закончится «нечего проверять»
     links = [l for l in links if l.startswith(VERIFIABLE)]
-    path = "/tmp/fast_pass_cand.txt"
+    path = os.path.join(paths.SCRATCH, "fast_pass_cand.txt")
     with open(path, "w") as f:
         for l in links[:limit]:
             f.write(l + "\n")
@@ -109,12 +119,14 @@ def verify(links, limit):
     return rows, r.stderr[-300:]
 
 
-def merge_and_publish(rows, alive_links):
+def merge_and_publish(rows, alive_links, link_origins=None):
     tested = load(os.path.join(CACHE, "tested.json"), [])
     tested_set = set(tested)
     alive_map = load(os.path.join(CACHE, "alive.json"), {})
     verified = load(os.path.join(CACHE, "verified.json"), [])
     vf_by_link = {v["link"]: v for v in verified if isinstance(v, dict) and v.get("link")}
+    stats = load(os.path.join(CACHE, "tg_stats.json"), {})
+    stats_changed = False
     for r in rows:
         link = r["link"]
         tested_set.add(link)
@@ -123,6 +135,13 @@ def merge_and_publish(rows, alive_links):
             vf_by_link[link] = {"link": link, "proto": r.get("proto", ""),
                                 "delay": r.get("delay", 0),
                                 "speed_MBps": float(r.get("speed_MBps") or 0)}
+            if link_origins and link in link_origins:
+                ch = link_origins[link]
+                if ch in stats:
+                    stats[ch]["verified_alive"] = stats[ch].get("verified_alive", 0) + 1
+                    stats_changed = True
+    if stats_changed:
+        save(os.path.join(CACHE, "tg_stats.json"), stats)
     save(os.path.join(CACHE, "tested.json"), list(tested_set))
     save(os.path.join(CACHE, "alive.json"), alive_map)
     save(os.path.join(CACHE, "verified.json"), list(vf_by_link.values()))
@@ -142,7 +161,7 @@ def merge_and_publish(rows, alive_links):
             continue
         seen.add(r["link"])
         merged.append(r)
-    path = "/tmp/fast_pass_merged.json"
+    path = os.path.join(paths.SCRATCH, "fast_pass_merged.json")
     save(path, merged)
     return path, len(merged)
 
@@ -155,7 +174,7 @@ def main():
     if not channels:
         print("нет статистики каналов — сначала прогоните tg_scrape.py")
         return 1
-    links, scanned = fresh_links(channels)
+    links, scanned, link_origins = fresh_links(channels)
     print(f"каналов: {scanned}, свежих ссылок: {len(links)}")
     pend_path = os.path.join(CACHE, "fast_pass_pending.json")
     pending = load(pend_path, [])
@@ -179,9 +198,9 @@ def main():
     print(f"проверено {len(rows)}, живых {len(alive)}" + (f" | {err.strip()[:80]}" if err else ""))
     if not alive:
         print("живых нет — подписку не трогаю")
-        merge_and_publish(rows, [])
+        merge_and_publish(rows, [], link_origins)
         return 0
-    merged_path, total = merge_and_publish(rows, alive)
+    merged_path, total = merge_and_publish(rows, alive, link_origins)
     env = dict(os.environ, SUB_FROM=merged_path)
     for script, extra, label in (("publish_sub.py", [], "сайт"), ("publish_pub.py", [], "репозиторий"),
                                  ("publish_pub.py", ["--gist"], "гист")):

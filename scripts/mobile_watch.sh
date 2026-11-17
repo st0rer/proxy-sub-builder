@@ -13,7 +13,7 @@ PI="${PI_HOST#*@}"
 MIN_ALIVE=${MIN_ALIVE:-4}
 MIN_FRAC_PCT=${MIN_FRAC_PCT:-40}   # ниже 40% живых — тоже тревога
 STATE=$VPN_CACHE/mobile_watch.json
-GIST_ID=${GIST_ID:?не задан GIST_ID}
+GIST_ID=${GIST_ID:-52759ee3f68c3d4b2f2d53c307867471}
 LOCAL=$VPN_OUT/sub-yota/nodes-yota.txt
 
 alert() {

@@ -162,11 +162,80 @@ def normalize_link(l):
     return l
 
 
+def clash_to_links(text: str):
+    """Извлекает URI-ссылки из Clash YAML подписки/файла."""
+    links = []
+    data = None
+    try:
+        import yaml
+        data = yaml.safe_load(text)
+    except Exception:
+        pass
+
+    if isinstance(data, dict) and isinstance(data.get("proxies"), list):
+        for p in data["proxies"]:
+            if not isinstance(p, dict):
+                continue
+            t = str(p.get("type", "")).lower()
+            server = str(p.get("server", "")).strip()
+            port = p.get("port")
+            name = str(p.get("name", "")).strip()
+            if not server or not port:
+                continue
+            try:
+                port = int(port)
+                if not (1 <= port <= 65535):
+                    continue
+            except Exception:
+                continue
+
+            if t == "vless" and p.get("uuid"):
+                q = []
+                if p.get("tls"):
+                    if p.get("reality-opts"):
+                        q.append("security=reality")
+                        ro = p["reality-opts"]
+                        if ro.get("public-key"):
+                            q.append(f"pbk={ro['public-key']}")
+                        if ro.get("short-id"):
+                            q.append(f"sid={ro['short-id']}")
+                    else:
+                        q.append("security=tls")
+                sni = p.get("servername") or p.get("sni")
+                if sni:
+                    q.append(f"sni={sni}")
+                net = p.get("network") or "tcp"
+                q.append(f"type={net}")
+                ws_opts = p.get("ws-opts") or {}
+                if net == "ws" and ws_opts.get("path"):
+                    q.append(f"path={ws_opts['path']}")
+                if p.get("flow") and p["flow"] == "xtls-rprx-vision":
+                    q.append("flow=xtls-rprx-vision")
+                query = ("?" + "&".join(q)) if q else ""
+                links.append(f"vless://{p['uuid']}@{server}:{port}{query}#{name}")
+            elif t in ("hy2", "hysteria2") and p.get("password"):
+                sni = p.get("sni") or p.get("servername", "")
+                q = f"?sni={sni}" if sni else ""
+                links.append(f"hysteria2://{p['password']}@{server}:{port}/{q}#{name}")
+            elif t in ("ss", "shadowsocks") and p.get("password") and p.get("cipher"):
+                userinfo = base64.b64encode(f"{p['cipher']}:{p['password']}".encode()).decode()
+                links.append(f"ss://{userinfo}@{server}:{port}#{name}")
+            elif t == "trojan" and p.get("password"):
+                sni = p.get("sni") or p.get("servername", "")
+                q = f"?sni={sni}" if sni else ""
+                links.append(f"trojan://{p['password']}@{server}:{port}{q}#{name}")
+            elif t == "tuic" and p.get("uuid") and p.get("password"):
+                links.append(f"tuic://{p['uuid']}:{p['password']}@{server}:{port}#{name}")
+    return links
+
+
 def extract_links(text: str):
-    """Достаёт vless/hy2/hysteria2 ссылки из текста (plain или base64-декодированного)."""
+    """Достаёт vless/hy2/hysteria2 ссылки из текста (plain, base64 или clash yaml)."""
     links = []
     for m in re.finditer(r'(?:vless|vmess|hy2|hysteria2|hysteria|ss|ssr|trojan|tuic|anytls|juicity)://[^\s<>"\'\\]+', text):
         links.append(html.unescape(m.group(0)))
+    if not links and ("proxies:" in text or "proxy-groups:" in text):
+        links.extend(clash_to_links(text))
     return links
 
 def parse_vless(url):
@@ -199,14 +268,14 @@ def parse_hy2(url):
         url, remark = url.split('#', 1)
     else:
         remark = ''
-    m = re.match(r'(?:hy2|hysteria2|hysteria)://(.+)@([^:@]+):(\d+)(\?.*)?$', url)
+    m = re.match(r'(?:hy2|hysteria2|hysteria)://(.+)@([^:@/]+|\[[0-9a-fA-F:]+\]):(\d+)/?(?:\?(.*))?$', url)
     if not m:
         # пароль может содержать '@' — делим по последнему
-        m = re.match(r'(?:hy2|hysteria2|hysteria)://(.+)@(.+):(\d+)(\?.*)?$', url)
+        m = re.match(r'(?:hy2|hysteria2|hysteria)://(.+)@(.+):(\d+)/?(?:\?(.*))?$', url)
         if not m:
             return None
-    auth, host, port = m.group(1), m.group(2), int(m.group(3))
-    q = urllib.parse.parse_qs((m.group(4) or '?').lstrip('?'))
+    auth, host, port = m.group(1), m.group(2).strip('[]'), int(m.group(3))
+    q = urllib.parse.parse_qs(m.group(4) or '')
     def g(k, d=None): return (q.get(k) or [d])[0]
     return {
         'auth': auth, 'host': host, 'port': port,

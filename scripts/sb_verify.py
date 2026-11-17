@@ -43,7 +43,7 @@ WORKDIR = os.path.join(paths.SCRATCH, "sb_run")
 SUPPORTED = {"vless", "vmess", "trojan", "shadowsocks", "ss", "anytls", "tuic", "hysteria2"}
 
 
-def tls_block(p, quic=False):
+def tls_block(p, quic=False, enable_fragment=True):
     tls = {"enabled": True,
            "server_name": p.get("sni") or p.get("servername") or p.get("server") or "",
            "insecure": bool(p.get("skip-cert-verify"))}
@@ -51,6 +51,10 @@ def tls_block(p, quic=False):
         tls["alpn"] = p["alpn"]
     if not quic:   # QUIC-протоколы (hy2/tuic) не умеют uTLS: "unsupported usage for uTLS"
         tls["utls"] = {"enabled": True, "fingerprint": p.get("client-fingerprint") or "chrome"}
+        if enable_fragment:
+            # Фрагментация ClientHello для обхода мобильного ТСПУ/DPI (Yota/Мегафон)
+            tls["fragment"] = True
+            tls["fragment_fallback_delay"] = "500ms"
     ro = p.get("reality-opts") or {}
     if p.get("reality-opts"):
         # Reality в sing-box требует uTLS — отпечаток обязателен, не выкидывать
@@ -169,7 +173,9 @@ def build(links):
     return cfg, meta
 
 
-def check_cfg(cfg, path="/tmp/sb_check.json"):
+def check_cfg(cfg, path=None):
+    if path is None:
+        path = os.path.join(paths.SCRATCH, "sb_check.json")
     json.dump(cfg, open(path, "w"))
     r = subprocess.run([SB, "check", "-c", path], capture_output=True, text=True)
     return r.returncode == 0, (r.stdout + r.stderr).strip()[:400]

@@ -28,18 +28,18 @@ import find_free_vpn as ffv
 import scan_any as sa
 import sb_verify as sbv
 
-PI = os.environ.get("PI_HOST", "")
-PI_PASS = os.environ.get("PI_PASS", "")
+PI = os.environ.get("PI_HOST") or paths.secret("pi_host", "")
+PI_PASS = os.environ.get("PI_PASS") or paths.secret("pi_pass", "")
 WORK = "/run/vpntest"          # tmpfs на малинке: SD-карту не изнашиваем
 OUT = os.path.join(paths.OUT, "mobile_results.json")
 CACHE = paths.CACHE
-N_HY2 = int(os.environ.get("PI_N_HY2", "20"))
-N_VLESS = int(os.environ.get("PI_N_VLESS", "30"))
-N_SS = int(os.environ.get("PI_N_SS", "10"))
-N_ANYTLS = int(os.environ.get("PI_N_ANYTLS", "8"))
-N_TUIC = int(os.environ.get("PI_N_TUIC", "4"))
+N_HY2 = int(os.environ.get("PI_N_HY2", "15"))
+N_VLESS = int(os.environ.get("PI_N_VLESS", "60"))
+N_SS = int(os.environ.get("PI_N_SS", "20"))
+N_ANYTLS = int(os.environ.get("PI_N_ANYTLS", "10"))
+N_TUIC = int(os.environ.get("PI_N_TUIC", "6"))
 N_POOL = int(os.environ.get("PI_N_POOL", "100"))  # добор из пула: замер — 1 живая на 109
-N_SIB = int(os.environ.get("PI_N_SIB", "15"))     # адреса рабочих панелей
+N_SIB = int(os.environ.get("PI_N_SIB", "35"))     # адреса рабочих панелей (выход 45% против 8%)
 PER_ADDR = 2
 API_PORT = 9099
 BASE_PORT = 21000
@@ -64,6 +64,32 @@ def pick_candidates():
         f = fam(link)
         if f in groups:
             groups[f].append((link, delay))
+
+    def vless_pri(item):
+        link, delay = item
+        # Reality и RU-SNI первыми, так как они лучше всего проходят ТСПУ мобильных сетей
+        is_reality = ("pbk=" in link or "security=reality" in link)
+        is_ru_sni = any(dom in link for dom in (".ru", "vk.com", "yandex.ru", "mail.ru", "gosuslugi.ru"))
+        pri = 0
+        if is_reality: pri += 2
+        if is_ru_sni: pri += 1
+        return (-pri, delay)
+
+    def hy2_pri(item):
+        link, delay = item
+        # На Yota порт UDP 443 режется оператором: штрафуем 443 без обфускации
+        a = sa._host_of(link)
+        port = a[1] if a else 443
+        non_std_port = (port != 443)
+        has_obfs = "obfs=" in link or "salamander" in link
+        pri = 0
+        if non_std_port: pri += 3
+        if has_obfs: pri += 2
+        if not non_std_port and not has_obfs: pri -= 5
+        return (-pri, delay)
+
+    groups["vless"].sort(key=vless_pri)
+    groups["hy2"].sort(key=hy2_pri)
 
     picked, per_addr = [], {}
     for f, budget in (("hy2", N_HY2), ("vless", N_VLESS), ("ss", N_SS),
@@ -122,7 +148,7 @@ def pick_candidates():
         taken_pool = 0
         for raw_line in reversed(tail):
             l = raw_line.strip()
-            if not l.startswith(("vless://", "hy2://", "hysteria2://")):
+            if not l.startswith(("vless://", "hy2://", "hysteria2://", "ss://", "tuic://", "anytls://")):
                 continue
             if l in picked_set or l in mtested:
                 continue
@@ -245,6 +271,10 @@ def build_sb_config(pairs):
             continue
         ob = sbv.to_singbox(p, n["name"])
         if not ob:
+            continue
+        # Битый flow валит sing-box на малинке: поддерживается только xtls-rprx-vision
+        flow = str(ob.get("flow") or "")
+        if flow and flow != "xtls-rprx-vision":
             continue
         inbounds.append({"type": "socks", "tag": "in" + n["name"], "listen": "127.0.0.1",
                          "listen_port": n["port"]})
