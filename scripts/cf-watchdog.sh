@@ -49,8 +49,8 @@ STATE="$LOG_DIR/cf-watchdog.state"
 PROBE_URL="${SINGBOX_PROBE_URL:-https://www.gstatic.com/generate_204}"
 GCP_SELECTOR="${SINGBOX_GCP_SELECTOR:-gcp}"
 
-# Приоритет пула: DE → FR → SG → US. cf сюда не входит (см. шапку).
-read -r -a POOL <<< "${SINGBOX_GCP_POOL:-hyst-9 hyst-3 hyst-10 hyst-6}"
+# Приоритет пула по умолчанию (если селектор пуст)
+DEFAULT_POOL="${SINGBOX_GCP_POOL:-hyst-9 hyst-3 hyst-10 hyst-6}"
 
 Z1_HOST="${Z1_HOST:-192.168.1.200}"
 Z1_WINPY="${Z1_WINPY:-$HOME/.hermes/venvs/z1win/bin/python}"
@@ -70,8 +70,23 @@ sleep 1
 close_tunnel() { for pid in $(pgrep -f "$API_PORT:127.0.0.1"); do kill "$pid" 2>/dev/null; done; }
 trap close_tunnel EXIT
 
-now=$(curl -s -m 5 "$API/proxies/$GCP_SELECTOR" \
-      | python3 -c 'import json,sys;print(json.load(sys.stdin).get("now",""))' 2>/dev/null)
+meta=$(curl -s -m 5 "$API/proxies/$GCP_SELECTOR" \
+       | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+    now = d.get("now", "")
+    all_nodes = [x for x in d.get("all", []) if x not in ("cf", "auto", "direct")]
+    print(f"{now}|{' '.join(all_nodes)}")
+except Exception:
+    print("|")' 2>/dev/null)
+
+now="${meta%%|*}"
+pool_str="${meta#*|}"
+if [ -n "$pool_str" ]; then
+    read -r -a POOL <<< "$pool_str"
+else
+    read -r -a POOL <<< "$DEFAULT_POOL"
+fi
 
 delay_of() {  # $1 = tag → ms, 0 если молчит
     curl -s -m 12 "$API/proxies/$1/delay?timeout=8000&url=$PROBE_URL" \

@@ -196,11 +196,11 @@ def main():
         except Exception as e:
             print(f"own node skipped: {e}")
 
-    # домены, которым нужен именно выход Cloudflare (Google отвергает VPS-ноды),
+    # домены, которым нужен чистый Google-выход (ноды вне Cloudflare, прошедшие проверку Gemini/IDE),
     # и которые при этом не тянут за собой видео-трафик YouTube
     GCP_DOMAINS = [
         "google.com", "googleapis.com", "gstatic.com", "googleusercontent.com",
-        "google.dev", "recaptcha.net",
+        "google.dev", "antigravity.google", "recaptcha.net",
     ]
     # фоновые опросы устройств и Chrome: через воркер им не нужно, Gemini они не обслуживают,
     # а квоту жгут постоянно (пуш, проверка связи, автофилл, апдейтер, Play)
@@ -234,6 +234,26 @@ def main():
 
     sniff_inbounds = [i["tag"] for i in inbounds if i["type"] in ("tun", "tproxy")]
 
+    # Пул для Google-сервисов (gcp): ноды вне Cloudflare, подтверждённые Gemini/CloudCode.
+    # Приоритет: Hysteria2 (быстрый UDP/BBR без потерь), затем VLESS/Trojan/SS.
+    gcp_pool = []
+    if geo_path:
+        gcp_pool = [ob["tag"] for ob in out if geo.get(key_of(ob), {}).get("gemini") == "ok"]
+    if not gcp_pool:
+        gcp_pool = [t for t in tags if t != "cf"]
+
+    hy_nodes = [t for t in gcp_pool if t.startswith("hyst")]
+    other_nodes = [t for t in gcp_pool if not t.startswith("hyst")]
+    gcp_sorted = hy_nodes + other_nodes
+    gcp_candidates = gcp_sorted[:8]
+    if not gcp_candidates:
+        gcp_candidates = ["auto"]
+    elif "auto" not in gcp_candidates:
+        gcp_candidates.append("auto")
+    default_gcp = gcp_candidates[0]
+
+    proxy_outbounds = ["auto"] + (["cf"] if own else []) + tags
+
     cfg = {
         "log": {"level": "warn", "timestamp": True},
         "inbounds": inbounds,
@@ -241,11 +261,11 @@ def main():
             {"type": "urltest", "tag": "auto", "outbounds": tags,
              "url": "https://www.gstatic.com/generate_204",
              "interval": "1m", "tolerance": 30},
-            # gcp — «гугловый» путь: свой Cloudflare-выход, при падении уходит на пул free-нод
+            # gcp — чистый Google-выход (Antigravity/CloudCode/Gemini): ротация по пулу проверенных нод
             {"type": "selector", "tag": "gcp",
-             "outbounds": ["cf", "auto"] if own else ["auto"],
-             "default": "cf" if own else "auto"},
-            {"type": "selector", "tag": "proxy", "outbounds": ["auto"] + tags, "default": "auto"},
+             "outbounds": gcp_candidates,
+             "default": default_gcp},
+            {"type": "selector", "tag": "proxy", "outbounds": proxy_outbounds, "default": "auto"},
             {"type": "direct", "tag": "direct"},
         ],
         "route": {
@@ -259,7 +279,10 @@ def main():
             "final": "proxy",
             "auto_detect_interface": True,
         },
-        "experimental": {"clash_api": {"external_controller": "127.0.0.1:9090"}},
+        "experimental": {
+            "clash_api": {"external_controller": "127.0.0.1:9090"},
+            "unified_delay": {"enabled": True}
+        },
     }
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)

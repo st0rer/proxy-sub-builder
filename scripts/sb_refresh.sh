@@ -82,7 +82,7 @@ deploy /tmp/sb-full.json || exit 1
 # --- замер страны выхода каждой ноды ---
 log "measuring exit country per node"
 close_tunnel   # на случай, если остался туннель от предыдущего запуска
-sshpass -p "$PW" ssh -f -N "${SSHOPTS[@]}" -o ExitOnForwardFailure=yes \
+sshpass -p "$ROUTER_PASS" ssh -f -N "${SSHOPTS[@]}" -o ExitOnForwardFailure=yes \
     -L 11080:127.0.0.1:1080 -L 19090:127.0.0.1:9090 "$ROUTER_HOST" || { log "TUNNEL FAILED"; exit 1; }
 sleep 3
 
@@ -114,20 +114,31 @@ for n in nodes:
         geo[key] = {'cc': '', 'err': 'no answer'}
         continue
 
-    # второй фильтр: как эту ноду реально принимает Gemini.
-    # 403 = страна не поддерживается (Турция и т.п.), 302 на google.com/sorry = анти-бот по датацентру
-    hdr = subprocess.run(['curl', '-s', '-m', '12', '--socks5-hostname', '127.0.0.1:11080',
-                          '-D', '-', '-o', '/dev/null', 'https://gemini.google.com/app'],
-                         capture_output=True, text=True).stdout
-    code, loc = '', ''
-    for line in hdr.splitlines():
-        if line.startswith('HTTP/'):
-            parts = line.split()
-            if len(parts) > 1:
-                code = parts[1]
-        elif line.lower().startswith('location:'):
-            loc = line.split(':', 1)[1].strip()
-    geo[key]['gemini'] = 'ok' if code == '200' else ('sorry' if 'sorry' in loc else (code or 'нет ответа'))
+    # второй фильтр: как ноду принимает Google/Gemini и Antigravity (daily-cloudcode-pa).
+    # 401 на loadCodeAssist = локация разрешена (ждёт токен). 400/403 = геоблок локации/Workers.
+    gcode = subprocess.run(['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', '-m', '6',
+                            '-X', 'POST', '-H', 'Content-Type: application/json', '-d', '{}',
+                            '--socks5-hostname', '127.0.0.1:11080',
+                            'https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist'],
+                           capture_output=True, text=True).stdout.strip()
+    if gcode == '401':
+        geo[key]['gemini'] = 'ok'
+    elif gcode in ('400', '403'):
+        geo[key]['gemini'] = 'geoblock'
+    else:
+        # резервный тест: gemini.google.com/app (200 = ok, 403 = геоблок, 302 sorry = анти-бот)
+        hdr = subprocess.run(['curl', '-s', '-m', '10', '--socks5-hostname', '127.0.0.1:11080',
+                              '-D', '-', '-o', '/dev/null', 'https://gemini.google.com/app'],
+                             capture_output=True, text=True).stdout
+        code, loc = '', ''
+        for line in hdr.splitlines():
+            if line.startswith('HTTP/'):
+                parts = line.split()
+                if len(parts) > 1:
+                    code = parts[1]
+            elif line.lower().startswith('location:'):
+                loc = line.split(':', 1)[1].strip()
+        geo[key]['gemini'] = 'ok' if code == '200' else ('sorry' if 'sorry' in loc else (code or 'нет ответа'))
 
 json.dump(geo, open(geo_path, 'w'), indent=1, ensure_ascii=False)
 ccs = {}

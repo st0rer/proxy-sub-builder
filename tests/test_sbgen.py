@@ -72,5 +72,30 @@ class TestSbGen(unittest.TestCase):
         self.assertIsNotNone(sniff_rule)
         self.assertIn("tproxy-in", sniff_rule["inbound"])
 
+    def test_gcp_routing_and_candidates(self):
+        os.environ["SINGBOX_SOURCE"] = self.src_file
+        os.environ["SINGBOX_CONFIG"] = self.out_file
+        sbgen.main()
+
+        with open(self.out_file, encoding="utf-8") as f:
+            cfg = json.load(f)
+
+        # Check gcp selector
+        gcp = next((o for o in cfg["outbounds"] if o.get("tag") == "gcp"), None)
+        self.assertIsNotNone(gcp)
+        self.assertEqual(gcp["type"], "selector")
+        self.assertNotEqual(gcp["default"], "cf")
+        self.assertTrue(any(t.startswith("hyst") or t.startswith("vles") for t in gcp["outbounds"]))
+
+        # Check experimental unified_delay
+        self.assertTrue(cfg.get("experimental", {}).get("unified_delay", {}).get("enabled", False))
+
+        # Check route rules for antigravity.google and googleapis
+        gcp_rule = next((r for r in cfg["route"]["rules"] if r.get("outbound") == "gcp"), None)
+        self.assertIsNotNone(gcp_rule)
+        domains = gcp_rule.get("domain_suffix", [])
+        self.assertIn("antigravity.google", domains)
+        self.assertIn("googleapis.com", domains)
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,11 +1,10 @@
 #!/bin/sh
-# cf-watchdog — сторож Cloudflare-ноды для селектора gcp на роутере
+# cf-watchdog — сторож Google-выхода (gcp) для sing-box на OpenWrt
 set -eu
 
 API="http://127.0.0.1:9090"
 LOG="/var/log/cf-watchdog.log"
 PROBE_URL="https://www.gstatic.com/generate_204"
-CF_TAG="cf"
 GCP_SELECTOR="gcp"
 
 log() { echo "[$(date -u +%F' '%T) UTC] $*" >> "$LOG"; }
@@ -15,14 +14,32 @@ if ! pgrep -f "sing-box run" >/dev/null 2>&1; then
 	exit 0
 fi
 
-# Проверяем наличие ноды cf в селекторе
-CF_EXISTS=$(curl -s -m 4 "$API/proxies/$CF_TAG" 2>/dev/null | grep -c '"name":"cf"' || echo 0)
-if [ "$CF_EXISTS" -eq 0 ]; then
+GCP_JSON=$(curl -s -m 4 "$API/proxies/$GCP_SELECTOR" 2>/dev/null || echo "")
+if [ -z "$GCP_JSON" ]; then
 	exit 0
 fi
 
-now=$(curl -s -m 4 "$API/proxies/$GCP_SELECTOR" 2>/dev/null | grep -o '"now":"[^"]*"' | cut -d'"' -f4 || echo "")
-delay=$(curl -s -m 10 "$API/proxies/$CF_TAG/delay?timeout=7000&url=$PROBE_URL" 2>/dev/null | grep -o '"delay":[0-9]*' | cut -d':' -f2 || echo "0")
+now=$(python3 -c 'import json,sys
+try:
+	print(json.loads(sys.argv[1]).get("now", ""))
+except Exception:
+	pass' "$GCP_JSON" 2>/dev/null || echo "")
+
+candidates=$(python3 -c 'import json,sys
+try:
+	d = json.loads(sys.argv[1])
+	print(" ".join(x for x in d.get("all", []) if x not in ("cf", "auto", "direct")))
+except Exception:
+	pass' "$GCP_JSON" 2>/dev/null || echo "")
+
+delay_of() {
+	curl -s -m 8 "$API/proxies/$1/delay?timeout=6000&url=$PROBE_URL" 2>/dev/null \
+		| python3 -c 'import json,sys
+try:
+	print(json.load(sys.stdin).get("delay", 0))
+except Exception:
+	print(0)' 2>/dev/null || echo "0"
+}
 
 switch() {
 	target="$1"
@@ -35,14 +52,34 @@ switch() {
 	fi
 }
 
-if [ -z "$delay" ] || [ "$delay" -eq 0 ]; then
-	if [ "$now" != "auto" ]; then
-		log "cf не отвечает, переключаю gcp на пул auto"
-		switch auto
+broken=0
+# Нода cf для Google-сервисов непригодна (Cloudflare Workers геоблокируются)
+if [ "$now" = "cf" ]; then
+	broken=1
+	log "gcp стоит на cf (Workers) — немедленная ротация"
+fi
+
+if [ "$broken" -eq 0 ]; then
+	d=$(delay_of "$now")
+	if [ -n "$d" ] && [ "$d" -gt 0 ]; then
+		exit 0
 	fi
+	log "текущий узел $now не отвечает — ротация"
+fi
+
+# Ищем первый живой узел из кандидатов
+pick=""
+for n in $candidates; do
+	[ "$n" = "$now" ] && continue
+	d=$(delay_of "$n")
+	if [ -n "$d" ] && [ "$d" -gt 0 ]; then
+		pick="$n"
+		break
+	fi
+done
+
+if [ -n "$pick" ]; then
+	switch "$pick"
 else
-	if [ "$now" != "$CF_TAG" ]; then
-		log "cf доступен (${delay}мс), возвращаю gcp на cf"
-		switch "$CF_TAG"
-	fi
+	log "нет доступных узлов в пуле gcp — оставляю $now"
 fi
