@@ -213,6 +213,37 @@ def main():
             total_live = len([r for r in rows if r.get("delay")])
             rows = [r for r in rows if r.get("delay") and r.get("gemini") == "ok"]
             print(f"фильтр Gemini/Antigravity: {total_live} -> {len(rows)} нод")
+            # Защита от ложного отсева при джиттере мобильного канала: если в текущем
+            # прогоне прошло меньше min_nodes, добираем подтверждённые Gemini-ноды из недавней истории (до 24 ч)
+            min_nodes_req = int(os.environ.get("SUB_MIN_NODES", "10"))
+            if len(rows) < min_nodes_req:
+                hist_p = os.path.join(CACHE, "mobile_history.json")
+                if os.path.exists(hist_p):
+                    try:
+                        with open(hist_p, encoding="utf-8") as fp:
+                            mhist = json.load(fp)
+                        now_ts = time.time()
+                        curr_links = {r["link"] for r in rows}
+                        added_hist = 0
+                        for l, info in sorted(mhist.items(), key=lambda kv: -kv[1].get("ts", 0)):
+                            if l in curr_links:
+                                continue
+                            if info.get("gemini") == "ok" and (now_ts - info.get("ts", 0) < 86400):
+                                rows.append({
+                                    "link": l,
+                                    "delay": info.get("delay") or 100,
+                                    "speed": info.get("speed"),
+                                    "speed_measured": True,
+                                    "gemini": "ok"
+                                })
+                                curr_links.add(l)
+                                added_hist += 1
+                                if len(rows) >= min_nodes_req * 2:
+                                    break
+                        if added_hist:
+                            print(f"добор из mobile_history (Gemini ok, < 24ч): +{added_hist} нод -> всего {len(rows)}")
+                    except Exception:
+                        pass
         links = [r["link"] for r in rows if r.get("delay")]
         links = [l for l in links if re.match(r"^(vless|vmess|hy2|hysteria2|hysteria|trojan|ss|ssr|tuic|anytls|juicity)://", l)]
         # скорость 0.0 = «не мерили»: ключ None, иначе MIN_SPEED выбросит живую ноду
@@ -340,9 +371,14 @@ def main():
     # Иначе упавший скан (или блокировка всех источников) тихо портит подписку.
     prev = prev_count(out_dir)
     if len(links) < min_nodes:
-        print(f"только {len(links)} нод (< {min_nodes}) — публикацию пропускаю, оставляю прошлый список ({prev})")
-        return 3
-    if prev and len(links) < prev * 0.5:
+        if prev == 0 and links:
+            print(f"первая публикация: {len(links)} нод (< {min_nodes}) — разрешаю публикацию")
+        elif os.environ.get("SUB_ALLOW_SHRINK") == "1" and links:
+            print(f"сжатие до {len(links)} нод (< {min_nodes}) разрешено через SUB_ALLOW_SHRINK")
+        else:
+            print(f"только {len(links)} нод (< {min_nodes}) — публикацию пропускаю, оставляю прошлый список ({prev})")
+            return 3
+    elif prev and len(links) < prev * 0.5:
         # Защита от деградации спасает от пустого списка, но мешает, когда старый
         # список уже мёртв: 16.11.2026 из 13 нод мобильной подписки проверку
         # проходили 3. Если прогон честно проверил старые ноды и они мертвы,

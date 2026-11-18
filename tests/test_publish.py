@@ -120,9 +120,33 @@ class TestPublish(unittest.TestCase):
             self.assertEqual(psbv.check_gemini_gate(21000), "ok")
             self.assertEqual(piv.check_gemini_gate(21000), "ok")
 
-        # 5. таймаут или обрыв сети -> err
+        # 5. loadCodeAssist 401, а gemini.google.com дал таймаут радиоканала -> ok (не отсекаем ложно!)
+        def mock_run_gemini_timeout(cmd, *args, **kwargs):
+            m = MagicMock()
+            if "loadCodeAssist" in cmd[-1]:
+                m.stdout = "401"
+                return m
+            raise subprocess.TimeoutExpired(cmd, 5)
+
+        with patch("subprocess.run", side_effect=mock_run_gemini_timeout):
+            self.assertEqual(psbv.check_gemini_gate(21000), "ok")
+            self.assertEqual(piv.check_gemini_gate(21000), "ok")
+
+        # 6. loadCodeAssist таймаут, но gemini.google.com 200 -> ok (резервный гейт сработал!)
+        def mock_run_lca_timeout(cmd, *args, **kwargs):
+            m = MagicMock()
+            if "gemini.google.com" in cmd[-1]:
+                m.stdout = "HTTP/1.1 200 OK\r\n"
+                return m
+            raise subprocess.TimeoutExpired(cmd, 5)
+
+        with patch("subprocess.run", side_effect=mock_run_lca_timeout):
+            self.assertEqual(psbv.check_gemini_gate(21000), "ok")
+            self.assertEqual(piv.check_gemini_gate(21000), "ok")
+
+        # 7. таймаут или обрыв сети на обоих ресурсах -> err
         def mock_run_err(cmd, *args, **kwargs):
-            raise subprocess.TimeoutExpired(cmd, 7)
+            raise subprocess.TimeoutExpired(cmd, 5)
 
         with patch("subprocess.run", side_effect=mock_run_err):
             self.assertEqual(psbv.check_gemini_gate(21000), "err")
@@ -192,6 +216,63 @@ class TestPublish(unittest.TestCase):
         with open(os.path.join(out_dir, "nodes-yota.txt"), encoding="utf-8") as f:
             out_nodes_all = f.read().splitlines()
         self.assertEqual(len(out_nodes_all), 5)
+
+    def test_gemini_history_replenishment(self):
+        # Проверяем добор из mobile_history при сетевом голодании (< min_nodes)
+        import time
+        tmp = tempfile.mkdtemp()
+        sub_from = os.path.join(tmp, "mobile_results.json")
+        out_dir = os.path.join(tmp, "out")
+        hist_p = os.path.join(tmp, "mobile_history.json")
+
+        # В текущем прогоне прошла всего 1 нода
+        nodes = [
+            {"name": "N0", "port": 21000, "link": "vless://11111111-1111-1111-1111-111111111111@1.1.1.1:443?security=reality&pbk=abc#CurrNode",
+             "delay": 150, "speed": 1.5, "speed_measured": True, "udp": True, "gemini": "ok"},
+        ]
+        with open(sub_from, "w", encoding="utf-8") as f:
+            json.dump(nodes, f)
+
+        # В истории лежат ещё 2 свежие ноды с gemini == 'ok' (возраст 2 часа)
+        now_ts = time.time()
+        mhist = {
+            "vless://22222222-2222-2222-2222-222222222222@2.2.2.2:443?security=reality&pbk=abc#HistNode1": {
+                "ts": now_ts - 7200, "speed": 2.0, "delay": 180, "gemini": "ok"
+            },
+            "vless://33333333-3333-3333-3333-333333333333@3.3.3.3:443?security=reality&pbk=abc#HistNode2": {
+                "ts": now_ts - 3600, "speed": 2.2, "delay": 160, "gemini": "ok"
+            },
+            "vless://44444444-4444-4444-4444-444444444444@4.4.4.4:443?security=reality&pbk=abc#HistBad": {
+                "ts": now_ts - 1000, "speed": 0.5, "delay": 200, "gemini": "geoblock"
+            },
+        }
+        with open(hist_p, "w", encoding="utf-8") as f:
+            json.dump(mhist, f)
+
+        env = {
+            "SUB_FROM": sub_from,
+            "SUB_OUT": out_dir,
+            "SUB_REQUIRE_GEMINI": "1",
+            "SUB_MIN_NODES": "3",
+            "SUB_ALLOW_SHRINK": "1",
+            "SUB_NODES": "nodes-yota.txt",
+            "SUB_V2RAY": "yota.txt",
+            "SKIP_XRAY_GATE": "1",
+            "NO_MERGE": "1",
+            "PROXY_SUB_CACHE": tmp,
+        }
+        with patch.dict(os.environ, env), patch("publish_sub.CACHE", tmp):
+            ret = ps.main()
+            self.assertEqual(ret, 0)
+
+        with open(os.path.join(out_dir, "nodes-yota.txt"), encoding="utf-8") as f:
+            out_nodes = f.read().splitlines()
+        # Должны быть 3 ноды: CurrNode + HistNode1 + HistNode2 (HistBad отсеяна!)
+        self.assertEqual(len(out_nodes), 3)
+        self.assertTrue(any("CurrNode" in l for l in out_nodes))
+        self.assertTrue(any("HistNode1" in l for l in out_nodes))
+        self.assertTrue(any("HistNode2" in l for l in out_nodes))
+        self.assertFalse(any("HistBad" in l for l in out_nodes))
 
 
 if __name__ == "__main__":

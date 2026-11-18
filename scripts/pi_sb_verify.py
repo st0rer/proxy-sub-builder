@@ -125,7 +125,10 @@ def curl_probe(port, url, max_time, fmt="%{http_code} %{time_total}"):
     return r.stdout.strip().split()
 
 
-def check_gemini_gate(port, timeout=7):
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+
+
+def check_gemini_gate(port, timeout=5):
     """Проверка доступности Google Gemini и Antigravity (Cloud Code PA).
 
     1) daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist:
@@ -134,33 +137,35 @@ def check_gemini_gate(port, timeout=7):
        GET -> 200 = интерфейс Gemini открывается. 403 / sorry = бан IP или капча.
 
     Возвращает статус: 'ok', 'geoblock', 'sorry' или 'err'.
+    Не отсекает ноды ложно при сетевом джиттере мобильного канала.
     """
     cmd_lca = [
         "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
-        "--max-time", str(timeout),
+        "--max-time", str(timeout), "--connect-timeout", "3",
         "-X", "POST", "-H", "Content-Type: application/json", "-d", "{}",
+        "-A", UA,
         "--socks5-hostname", f"127.0.0.1:{port}",
         "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
     ]
     try:
-        r_lca = subprocess.run(cmd_lca, capture_output=True, text=True, timeout=timeout + 3)
+        r_lca = subprocess.run(cmd_lca, capture_output=True, text=True, timeout=timeout + 2)
         glca = r_lca.stdout.strip()
     except Exception:
         glca = "000"
 
+    # Явный региональный отказ со стороны Google Cloud Code (РФ/Иран и т.п.)
     if glca in ("400", "403"):
         return "geoblock"
-    if glca not in ("401", "200"):
-        return "err"
 
     cmd_gem = [
         "curl", "-s", "-D", "-", "-o", "/dev/null",
-        "--max-time", str(timeout),
+        "--max-time", str(timeout), "--connect-timeout", "3",
+        "-A", UA,
         "--socks5-hostname", f"127.0.0.1:{port}",
         "https://gemini.google.com/app",
     ]
     try:
-        r_gem = subprocess.run(cmd_gem, capture_output=True, text=True, timeout=timeout + 3)
+        r_gem = subprocess.run(cmd_gem, capture_output=True, text=True, timeout=timeout + 2)
         hdr = r_gem.stdout
     except Exception:
         hdr = ""
@@ -174,16 +179,21 @@ def check_gemini_gate(port, timeout=7):
         elif line.lower().startswith("location:"):
             loc = line.split(":", 1)[1].strip()
 
-    if code == "200":
-        return "ok"
+    # Анализ ответов:
+    # 1. Явные блокировки
     if "sorry" in loc.lower():
-        return "sorry"
-    if code in ("400", "403"):
+        return "sorry"   # Анти-бот капча Google Sorry
+    if code in ("400", "403") or (code.startswith("3") and "not-available" in loc.lower()):
         return "geoblock"
-    if code.startswith("3") and "not-available" in loc.lower():
-        return "geoblock"
-    if code.startswith("3") and "sorry" not in loc.lower():
+
+    # 2. Подтверждённый успех
+    if code == "200" or (code.startswith("3") and "accounts.google.com" in loc.lower()):
         return "ok"
+    if glca in ("401", "200"):
+        # Если loadCodeAssist принял локацию, но gemini.google.com дал таймаут из-за
+        # радиоканала Yota, нода пригодна для Antigravity и Cloud Code — не отсекаем её ложно.
+        return "ok"
+
     return code or "err"
 
 
@@ -261,7 +271,9 @@ def main():
         if not nodes:
             json.dump([], open(out_f, "w"))
             return 0
-        par = 6 if avail > 400 else (4 if avail > 250 else 2)
+        # На Raspberry Pi 3 ровно 4 ядра (Cortex-A53): больше 4 воркеров создаёт
+        # перегрузку планировщика ядра и троттлинг CPU. Ограничиваем сверху 4.
+        par = min(4, 4 if avail > 250 else 2)
 
         def try_stages(port, stages):
             """Пройти лестницу URL, вернуть (задержка_мс, метка_этапа) или (0, "")."""
@@ -315,41 +327,40 @@ def main():
             print(f"  второй проход: {time.time()-t1:.0f} c, живых стало "
                   f"{sum(1 for r in rows if r['delay'])}", flush=True)
 
-        # подтверждение выхода: 204 означает «через туннель что-то ответило», но не
-        # доказывает, что трафик выходит именно из ноды. ipify/ifconfig стоят ~1 КБ
-        def exit_ip(n):
-            for url in ("https://api.ipify.org?format=json", "http://ifconfig.me/all.json",
-                        "https://ipinfo.io/json"):
-                out = subprocess.run(["curl", "-s", "--max-time", "8", "--socks5-hostname",
-                                      f"127.0.0.1:{n['port']}", url], capture_output=True, text=True)
-                try:
-                    j = json.loads(out.stdout or "{}")
-                except Exception:
-                    continue
-                ip = j.get("ip") or j.get("ip_addr")
-                if ip:
-                    return ip
-            return ""
+        def fast_exit_ip(port):
+            """Быстрый запрос IP через api.ipify.org (1 запрос, тайм-аут 4с)."""
+            try:
+                out = subprocess.run(["curl", "-s", "--max-time", "4", "--connect-timeout", "3",
+                                      "--socks5-hostname", f"127.0.0.1:{port}",
+                                      "https://api.ipify.org?format=json"],
+                                     capture_output=True, text=True, timeout=5)
+                j = json.loads(out.stdout or "{}")
+                return j.get("ip") or ""
+            except Exception:
+                return ""
 
         live0 = [r for r in rows if r["delay"]]
-        with cf.ThreadPoolExecutor(max_workers=par) as ex:
-            for r, ip in zip(live0, ex.map(exit_ip, live0)):
-                r["ip"] = ip
-
         skip_gemini = os.environ.get("SKIP_GEMINI_GATE") == "1"
-        if not skip_gemini and live0:
-            print(f"  проверка гейта Gemini/Antigravity для {len(live0)} живых нод…", flush=True)
-            with cf.ThreadPoolExecutor(max_workers=par) as ex:
-                for r, gres in zip(live0, ex.map(lambda x: check_gemini_gate(x["port"]), live0)):
-                    r["gemini"] = gres
-            gem_ok = sum(1 for r in live0 if r.get("gemini") == "ok")
-            print(f"  гейт Gemini/Antigravity пройден: {gem_ok} из {len(live0)}", flush=True)
+        need_exit_ip = os.environ.get("REQUIRE_EXIT_IP") == "1"
 
-        # Раньше нода без ответа ipify выбрасывалась. Это ложное отрицание: факт
-        # прохождения 16 КБ с CDN уже доказывает, что трафик выходит, а ipify у
-        # части выходов блокируется или отвечает дольше 8 с. Оставляем поле как
-        # справку; жёсткий отсев — только по флагу.
-        if os.environ.get("REQUIRE_EXIT_IP") == "1":
+        # Объединяем проверку гейта Gemini и exit_ip в один параллельный проход:
+        # это экономит до 30-40 секунд и исключает дублирующие форки процессов на Pi 3.
+        def verify_live(r):
+            gres = check_gemini_gate(r["port"]) if not skip_gemini else "skip"
+            ip = fast_exit_ip(r["port"]) if need_exit_ip else ""
+            return {**r, "gemini": gres, "ip": ip}
+
+        if live0:
+            print(f"  проверка гейта Gemini/Antigravity для {len(live0)} живых нод…", flush=True)
+            t_gate = time.time()
+            with cf.ThreadPoolExecutor(max_workers=par) as ex:
+                rows_live = list(ex.map(verify_live, live0))
+            live_map = {r["name"]: r for r in rows_live}
+            rows = [live_map.get(r["name"], r) for r in rows]
+            gem_ok = sum(1 for r in rows_live if r.get("gemini") == "ok")
+            print(f"  гейт Gemini/Antigravity пройден: {gem_ok} из {len(live0)} ({time.time()-t_gate:.1f} c)", flush=True)
+
+        if need_exit_ip:
             rows = [r for r in rows if not r["delay"] or r.get("ip")]
         traffic = len(nodes) * 0.009
         # Приоритет в замере скорости: сначала ноды, прошедшие гейт Gemini/Antigravity,

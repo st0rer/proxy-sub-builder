@@ -97,7 +97,10 @@ def speed(port, max_time=8):
         return 0.0
 
 
-def check_gemini_gate(port, timeout=7):
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+
+
+def check_gemini_gate(port, timeout=5):
     """Проверка доступности Google Gemini и Antigravity (Cloud Code PA).
 
     1) daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist:
@@ -106,33 +109,35 @@ def check_gemini_gate(port, timeout=7):
        GET -> 200 = интерфейс Gemini открывается. 403 / sorry = бан IP или капча.
 
     Возвращает статус: 'ok', 'geoblock', 'sorry' или 'err'.
+    Не отсекает ноды ложно при сетевом джиттере мобильного канала.
     """
     cmd_lca = [
         "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
-        "--max-time", str(timeout),
+        "--max-time", str(timeout), "--connect-timeout", "3",
         "-X", "POST", "-H", "Content-Type: application/json", "-d", "{}",
+        "-A", UA,
         "--socks5-hostname", f"127.0.0.1:{port}",
         "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
     ]
     try:
-        r_lca = subprocess.run(cmd_lca, capture_output=True, text=True, timeout=timeout + 3)
+        r_lca = subprocess.run(cmd_lca, capture_output=True, text=True, timeout=timeout + 2)
         glca = r_lca.stdout.strip()
     except Exception:
         glca = "000"
 
+    # Явный региональный отказ со стороны Google Cloud Code (РФ/Иран и т.п.)
     if glca in ("400", "403"):
         return "geoblock"
-    if glca not in ("401", "200"):
-        return "err"
 
     cmd_gem = [
         "curl", "-s", "-D", "-", "-o", "/dev/null",
-        "--max-time", str(timeout),
+        "--max-time", str(timeout), "--connect-timeout", "3",
+        "-A", UA,
         "--socks5-hostname", f"127.0.0.1:{port}",
         "https://gemini.google.com/app",
     ]
     try:
-        r_gem = subprocess.run(cmd_gem, capture_output=True, text=True, timeout=timeout + 3)
+        r_gem = subprocess.run(cmd_gem, capture_output=True, text=True, timeout=timeout + 2)
         hdr = r_gem.stdout
     except Exception:
         hdr = ""
@@ -146,16 +151,16 @@ def check_gemini_gate(port, timeout=7):
         elif line.lower().startswith("location:"):
             loc = line.split(":", 1)[1].strip()
 
-    if code == "200":
-        return "ok"
     if "sorry" in loc.lower():
         return "sorry"
-    if code in ("400", "403"):
+    if code in ("400", "403") or (code.startswith("3") and "not-available" in loc.lower()):
         return "geoblock"
-    if code.startswith("3") and "not-available" in loc.lower():
-        return "geoblock"
-    if code.startswith("3") and "sorry" not in loc.lower():
+
+    if code == "200" or (code.startswith("3") and "accounts.google.com" in loc.lower()):
         return "ok"
+    if glca in ("401", "200"):
+        return "ok"
+
     return code or "err"
 
 
@@ -256,13 +261,11 @@ def main():
         import concurrent.futures as cf
         # 6 потоков — норма для Pi 3 при ~760 МБ свободных; при нехватке памяти
         # проверки начинают свопиться и всё упирается в таймауты
-        if avail > 400:
-            par_default = 6
-        elif avail > 250:
+        if avail > 250:
             par_default = 4
         else:
             par_default = 2
-        PAR = int(os.environ.get("PI_PAR", str(par_default)))
+        PAR = min(4, int(os.environ.get("PI_PAR", str(par_default))))
 
         def probe(n):
             q = urllib.parse.quote(DELAY_URL, safe="")
