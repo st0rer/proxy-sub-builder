@@ -66,7 +66,14 @@ if ! sshpass -p "$ROUTER_PASS" ssh -f -N "${SSHOPTS[@]}" -o ExitOnForwardFailure
     log "нет доступа к роутеру"
     exit 1
 fi
-sleep 1
+# ждём готовности форварда: фиксированный sleep 1 не всегда хватает (туннель поднимается
+# асинхронно), и сторож видел пустой ответ API → «узел не отвечает» → PUT в пустоту
+ready=0
+for _ in $(seq 1 20); do
+    if curl -s -m 2 "$API/proxies/$GCP_SELECTOR" | grep -q '"now"'; then ready=1; break; fi
+    sleep 0.5
+done
+if [ "$ready" != "1" ]; then log "clash_api не отвечает через туннель — пропускаю цикл"; exit 1; fi
 close_tunnel() { for pid in $(pgrep -f "$API_PORT:127.0.0.1"); do kill "$pid" 2>/dev/null; done; }
 trap close_tunnel EXIT
 
@@ -76,7 +83,7 @@ try:
     d = json.load(sys.stdin)
     now = d.get("now", "")
     all_nodes = [x for x in d.get("all", []) if x not in ("cf", "auto", "direct")]
-    print(f"{now}|{' '.join(all_nodes)}")
+    print(now + "|" + " ".join(all_nodes))
 except Exception:
     print("|")' 2>/dev/null)
 
