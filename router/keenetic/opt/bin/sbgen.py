@@ -81,10 +81,16 @@ def parse_ss(u):
 
 
 def load_lines(path):
+    if not os.path.exists(path):
+        return []
     with open(path, encoding="utf-8", errors="ignore") as f:
         raw = f.read()
     if "://" not in raw.strip()[:200]:
-        raw = base64.b64decode(raw + "=" * (-len(raw.strip()) % 4)).decode("utf-8", "ignore")
+        try:
+            raw = base64.b64decode(raw + "=" * (-len(raw.strip()) % 4)).decode("utf-8", "ignore")
+        except Exception:
+            # Не base64 (например HTML-страница ошибки, капча, текст)
+            pass
     return [l.strip() for l in raw.splitlines() if l.strip()]
 
 
@@ -253,8 +259,8 @@ def main():
     other_nodes = [t for t in gcp_pool if not t.startswith("hyst")]
     gcp_sorted = hy_nodes + other_nodes
     gcp_candidates = gcp_sorted[:8]
-    if not gcp_candidates:
-        gcp_candidates = ["auto"]
+    if not gcp_candidates or gcp_candidates == ["auto"]:
+        gcp_candidates = ["direct"]
     elif "auto" not in gcp_candidates:
         gcp_candidates.append("auto")
     default_gcp = gcp_candidates[0]
@@ -276,15 +282,16 @@ def main():
     if not video_candidates:
         video_candidates = [t for t in tags[:8] if t != "cf"]
     if not video_candidates:
-        video_candidates = ["auto"]
+        video_candidates = ["direct"]
 
-    proxy_outbounds = ["auto"] + (["cf"] if own else []) + tags
+    auto_outbounds = tags if tags else ["direct"]
+    proxy_outbounds = ["auto"] + (["cf"] if own else []) + (tags if tags else ["direct"])
 
     cfg = {
         "log": {"level": "warn", "timestamp": True},
         "inbounds": inbounds,
         "outbounds": own + out + [
-            {"type": "urltest", "tag": "auto", "outbounds": tags,
+            {"type": "urltest", "tag": "auto", "outbounds": auto_outbounds,
              "url": "https://www.gstatic.com/generate_204",
              "interval": "1m", "tolerance": 30},
             # video — выделенный скоростной пул для YouTube (минимизирует RTT к GGC кэшам, изолирован от Gemini)
