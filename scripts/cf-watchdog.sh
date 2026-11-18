@@ -48,6 +48,7 @@ LOG="$LOG_DIR/cf-watchdog.log"
 STATE="$LOG_DIR/cf-watchdog.state"
 PROBE_URL="${SINGBOX_PROBE_URL:-https://www.gstatic.com/generate_204}"
 GCP_SELECTOR="${SINGBOX_GCP_SELECTOR:-gcp}"
+SOCKS_PORT="${SINGBOX_SOCKS_PORT:-11091}"
 
 # Приоритет пула по умолчанию (если селектор пуст)
 DEFAULT_POOL="${SINGBOX_GCP_POOL:-hyst-9 hyst-3 hyst-10 hyst-6}"
@@ -59,13 +60,14 @@ Z1_WINRUN="${Z1_WINRUN:-$HOME/.hermes/skills/mlops/inference/z1x-mini-hermes/scr
 mkdir -p "$LOG_DIR"
 log() { echo "[$(date -u +%F' '%T)UTC] $*" >> "$LOG"; }
 
-# туннель до clash_api (убираем прежний, чтобы не копились)
-for pid in $(pgrep -f "$API_PORT:127.0.0.1"); do kill "$pid" 2>/dev/null; done
-if ! sshpass -p "$ROUTER_PASS" ssh -f -N "${SSHOPTS[@]}" -o ExitOnForwardFailure=yes \
-        -L "$API_PORT:127.0.0.1:9090" "$ROUTER_HOST" 2>/dev/null; then
-    log "нет доступа к роутеру"
-    exit 1
-fi
+# туннель до clash_api. PID держим сами: pgrep -f "<порт>:127.0.0.1" убивал всё,
+# в чьей командной строке встречался порт — включая чужие шеллы и замер sb_refresh
+PIDFILE="${TMPDIR:-/tmp}/cf-watchdog-tunnel.$API_PORT.pid"
+if [ -f "$PIDFILE" ]; then kill "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; rm -f "$PIDFILE"; fi
+sshpass -p "$ROUTER_PASS" ssh -N "${SSHOPTS[@]}" -o ExitOnForwardFailure=yes \
+    -L "$API_PORT:127.0.0.1:9090" -L "${SOCKS_PORT}:127.0.0.1:1080" "$ROUTER_HOST" >/dev/null 2>&1 &
+TUN_PID=$!
+echo "$TUN_PID" > "$PIDFILE"
 # ждём готовности форварда: фиксированный sleep 1 не всегда хватает (туннель поднимается
 # асинхронно), и сторож видел пустой ответ API → «узел не отвечает» → PUT в пустоту
 ready=0
@@ -74,7 +76,7 @@ for _ in $(seq 1 20); do
     sleep 0.5
 done
 if [ "$ready" != "1" ]; then log "clash_api не отвечает через туннель — пропускаю цикл"; exit 1; fi
-close_tunnel() { for pid in $(pgrep -f "$API_PORT:127.0.0.1"); do kill "$pid" 2>/dev/null; done; }
+close_tunnel() { [ -n "${TUN_PID:-}" ] && kill "$TUN_PID" 2>/dev/null; rm -f "$PIDFILE" 2>/dev/null; }
 trap close_tunnel EXIT
 
 meta=$(curl -s -m 5 "$API/proxies/$GCP_SELECTOR" \
@@ -94,6 +96,18 @@ if [ -n "$pool_str" ]; then
 else
     read -r -a POOL <<< "$DEFAULT_POOL"
 fi
+
+# Гейт Google глазами клиента: 401 на loadCodeAssist (ждёт токен) и 200 на gemini.google.com/app.
+# 403 = IP забанен целиком (типично для хостинговых подсетей), 400 = геоблок локации.
+gate_probe() {  # $1 = тег; печатает "lca gemini"
+    local lca g
+    lca=$(curl -s -o /dev/null -w '%{http_code}' -m 8 -X POST -H 'Content-Type: application/json' \
+          -d '{}' --socks5-hostname "127.0.0.1:$SOCKS_PORT" \
+          https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist 2>/dev/null)
+    g=$(curl -s -o /dev/null -w '%{http_code}' -m 8 --socks5-hostname "127.0.0.1:$SOCKS_PORT" \
+        https://gemini.google.com/app 2>/dev/null)
+    echo "${lca:-000} ${g:-000}"
+}
 
 delay_of() {  # $1 = tag → ms, 0 если молчит
     curl -s -m 12 "$API/proxies/$1/delay?timeout=8000&url=$PROBE_URL" \
@@ -129,10 +143,21 @@ fi
 # cf для этого гейта не годится всегда — уводим даже без ошибок в логе
 if [ "$now" = "cf" ]; then broken=1; log "$GCP_SELECTOR стоит на cf — уводим"; fi
 
+# гейт проверяем всегда: узел может быть жив по задержке и при этом забанен Google
+read -r glca ggem <<< "$(gate_probe "$now")"
+gate_ok=0
+case "${glca:-000}" in
+    401|200) [ "${ggem:-000}" = "200" ] && gate_ok=1 ;;
+esac
+if [ "$gate_ok" = "0" ]; then
+    broken=1
+    log "гейт через $now: loadCodeAssist $glca, gemini $ggem — ротация"
+fi
+
 if [ "$broken" = "0" ]; then
     d=$(delay_of "$now")
     if [ -n "${d:-}" ] && [ "${d:-0}" != "0" ]; then
-        log "ок: $now жив (${d}ms), новых ошибок нет"
+        log "ок: $now жив (${d}ms), гейт $glca/$ggem, новых ошибок нет"
         exit 0
     fi
     log "текущий узел $now не отвечает (${d:-?}) — ротация"
@@ -142,18 +167,29 @@ pick=""; pick_ms=""
 for n in "${POOL[@]}"; do
     [ "$n" = "$now" ] && continue
     d=$(delay_of "$n")
-    if [ -n "${d:-}" ] && [ "${d:-0}" != "0" ]; then pick="$n"; pick_ms="$d"; break; fi
+    [ -n "${d:-}" ] && [ "${d:-0}" != "0" ] || continue
+    # гейт можно померить только с самого узла, поэтому сначала переключаем на него
+    code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 -X PUT \
+           -H 'Content-Type: application/json' -d "{\"name\":\"$n\"}" "$API/proxies/$GCP_SELECTOR")
+    [ "$code" = "204" ] || { log "  $n: переключение HTTP $code — пропускаю"; continue; }
+    sleep 0.4
+    read -r clca cgem <<< "$(gate_probe "$n")"
+    case "${clca:-000}" in
+        401|200) if [ "${cgem:-000}" = "200" ]; then pick="$n"; pick_ms="$d"; break; fi
+                 log "  $n: жив, но гейт $clca/$cgem — пропускаю" ;;
+        *) log "  $n: жив, но гейт $clca/$cgem — пропускаю" ;;
+    esac
 done
 
 if [ -z "$pick" ]; then
-    log "нет живых узлов в пуле — оставляю $now"
+    # откат: ни один кандидат гейт не прошёл — возвращаем прежний узел
+    curl -s -o /dev/null -m 5 -X PUT -H 'Content-Type: application/json' \
+         -d "{\"name\":\"$now\"}" "$API/proxies/$GCP_SELECTOR"
+    log "нет узлов с проходящим гейтом — оставляю $now"
     exit 1
 fi
-
-code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 -X PUT \
-       -H 'Content-Type: application/json' -d "{\"name\":\"$pick\"}" "$API/proxies/$GCP_SELECTOR")
-if [ "$code" = "204" ]; then
-    log "$GCP_SELECTOR -> $pick (${pick_ms}ms, было $now)"
+if true; then
+    log "$GCP_SELECTOR -> $pick (${pick_ms}ms, гейт ${clca}/${cgem}, было $now)"
 else
     log "не смог $GCP_SELECTOR -> $pick: HTTP $code"
 fi
