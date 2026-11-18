@@ -152,15 +152,22 @@ class TestVideoPipeline(unittest.TestCase):
             # Connect request to real domain www.youtube.com:443
             target_host = b"www.youtube.com"
             s.sendall(b"\x05\x01\x00\x03" + bytes([len(target_host)]) + target_host + (443).to_bytes(2, "big"))
-            time.sleep(0.3)
 
-            # 3. Опрашиваем Clash API /connections
+            # 3. Опрашиваем Clash API /connections (до 2 секунд на появление соединения)
             api_url = f"http://127.0.0.1:{clash_port}"
+            conns = []
             t_start = time.perf_counter()
-            with urllib.request.urlopen(f"{api_url}/connections") as resp:
-                api_duration = (time.perf_counter() - t_start) * 1000
-                data = json.loads(resp.read().decode())
-                conns = data.get("connections", [])
+            for _ in range(20):
+                try:
+                    with urllib.request.urlopen(f"{api_url}/connections") as resp:
+                        api_duration = (time.perf_counter() - t_start) * 1000
+                        data = json.loads(resp.read().decode())
+                        conns = data.get("connections", [])
+                        if conns:
+                            break
+                except Exception:
+                    pass
+                time.sleep(0.1)
 
             self.assertGreaterEqual(len(conns), 1)
             video_conn = next((c for c in conns if "youtube.com" in (c.get("metadata", {}).get("host") or "")), None)
@@ -191,11 +198,12 @@ class TestVideoPipeline(unittest.TestCase):
 
             # 5. Проверяем, что сокет клиента действительно сброшен (RST)
             time.sleep(0.2)
-            with self.assertRaises((socket.error, ConnectionResetError, OSError)):
-                s.sendall(b"GET /videoplayback HTTP/1.1\r\n\r\n")
-                s.recv(1024)
-
-            s.close()
+            try:
+                with self.assertRaises((socket.error, ConnectionResetError, OSError)):
+                    s.sendall(b"GET /videoplayback HTTP/1.1\r\n\r\n")
+                    s.recv(1024)
+            finally:
+                s.close()
         finally:
             proc.terminate()
             proc.wait()

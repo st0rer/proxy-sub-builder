@@ -205,12 +205,16 @@ def pick_candidates():
 
     # Ноды, которые уже работали с Yota, но выпали из домашнего alive.json:
     # сеть Yota блокирует адреса не так, как домашний канал, поэтому домашний
-    # отбор их не видит. Берём из истории, самые свежие первыми.
+    # отбор их не видит. Приоритет отдаём подтверждённым нодам с Gemini/Antigravity.
     hist_f = os.path.join(CACHE, "mobile_history.json")
     if os.path.exists(hist_f):
         hist = json.load(open(hist_f))
         have = set(picked)
-        for link, _v in sorted(hist.items(), key=lambda kv: -kv[1].get("ts", 0)):
+        def hist_sort_key(item):
+            _, v = item
+            is_gem = 1 if v.get("gemini") == "ok" else 0
+            return (-is_gem, -v.get("ts", 0))
+        for link, _v in sorted(hist.items(), key=hist_sort_key):
             if link in have:
                 continue
             a = sa._host_of(link)
@@ -361,7 +365,8 @@ def main():
     hist = json.load(open(hist_p)) if os.path.exists(hist_p) else {}
     now = int(time.time())
     for x in live:
-        hist[x["link"]] = {"ts": now, "speed": x.get("speed") or 0, "delay": x.get("delay")}
+        hist[x["link"]] = {"ts": now, "speed": x.get("speed") or 0, "delay": x.get("delay"),
+                           "gemini": x.get("gemini")}
     hist = {k: v for k, v in hist.items() if now - v.get("ts", 0) < 7 * 86400}
     json.dump(hist, open(hist_p, "w"))
     json.dump(rows, open(OUT, "w"), ensure_ascii=False, indent=1)
@@ -370,10 +375,12 @@ def main():
     for x in rows:
         hist_t[x["link"]] = int(time.time())
     json.dump(hist_t, open(tf, "w"))
+    gem_ok = [x for x in live if x.get("gemini") == "ok"]
     print(f"из Yota живых: {len(live)} из {len(rows)} -> {OUT}")
+    print(f"из них проверено для Gemini/Antigravity: {len(gem_ok)} из {len(live)}")
     for x in sorted(live, key=lambda y: -(y.get("speed") or 0))[:5]:
         print(f"   {(x.get('speed') or 0):>5.2f} МБ/с {x['delay']:>5} мс udp={'да' if x['udp'] else 'нет'} "
-              f"{x['link'][:44]}")
+              f"gemini={x.get('gemini', 'skip')} {x['link'][:44]}")
     return 0
 
 

@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """Тесты генерации подписок, разделения по протоколам и флагов стран (publish_sub)."""
+import json
 import os
+import subprocess
 import sys
+import tempfile
 import unittest
+from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import publish_sub as ps
+import pi_sb_verify as psbv
+import pi_verify as piv
 
 
 class TestPublish(unittest.TestCase):
@@ -60,6 +66,132 @@ class TestPublish(unittest.TestCase):
         self.assertTrue(sorted_links[1].startswith("tuic://"))
         self.assertTrue(sorted_links[2].startswith("vless://"))
         self.assertTrue(sorted_links[3].startswith("ss://"))
+
+    def test_gemini_gate_probe_logic(self):
+        # Проверяем все ветви логики check_gemini_gate в pi_sb_verify и pi_verify
+
+        # 1. loadCodeAssist 401 + gemini.google.com 200 -> ok
+        def mock_run_ok(cmd, *args, **kwargs):
+            m = MagicMock()
+            if "loadCodeAssist" in cmd[-1]:
+                m.stdout = "401"
+            elif "gemini.google.com" in cmd[-1]:
+                m.stdout = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
+            return m
+
+        with patch("subprocess.run", side_effect=mock_run_ok):
+            self.assertEqual(psbv.check_gemini_gate(21000), "ok")
+            self.assertEqual(piv.check_gemini_gate(21000), "ok")
+
+        # 2. loadCodeAssist 403 (геоблок Google Cloud Code) -> geoblock
+        def mock_run_geoblock_lca(cmd, *args, **kwargs):
+            m = MagicMock()
+            if "loadCodeAssist" in cmd[-1]:
+                m.stdout = "403"
+            return m
+
+        with patch("subprocess.run", side_effect=mock_run_geoblock_lca):
+            self.assertEqual(psbv.check_gemini_gate(21000), "geoblock")
+            self.assertEqual(piv.check_gemini_gate(21000), "geoblock")
+
+        # 3. loadCodeAssist 401, но gemini.google.com отдаёт 302 с sorry/index (капча / анти-бот) -> sorry
+        def mock_run_sorry(cmd, *args, **kwargs):
+            m = MagicMock()
+            if "loadCodeAssist" in cmd[-1]:
+                m.stdout = "401"
+            elif "gemini.google.com" in cmd[-1]:
+                m.stdout = "HTTP/1.1 302 Found\r\nLocation: https://www.google.com/sorry/index?continue=https://gemini.google.com/app\r\n"
+            return m
+
+        with patch("subprocess.run", side_effect=mock_run_sorry):
+            self.assertEqual(psbv.check_gemini_gate(21000), "sorry")
+            self.assertEqual(piv.check_gemini_gate(21000), "sorry")
+
+        # 4. loadCodeAssist 401 + gemini 302 на Google Accounts (редирект на логин) -> ok
+        def mock_run_login_redirect(cmd, *args, **kwargs):
+            m = MagicMock()
+            if "loadCodeAssist" in cmd[-1]:
+                m.stdout = "401"
+            elif "gemini.google.com" in cmd[-1]:
+                m.stdout = "HTTP/1.1 302 Found\r\nLocation: https://accounts.google.com/ServiceLogin?service=bard\r\n"
+            return m
+
+        with patch("subprocess.run", side_effect=mock_run_login_redirect):
+            self.assertEqual(psbv.check_gemini_gate(21000), "ok")
+            self.assertEqual(piv.check_gemini_gate(21000), "ok")
+
+        # 5. таймаут или обрыв сети -> err
+        def mock_run_err(cmd, *args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd, 7)
+
+        with patch("subprocess.run", side_effect=mock_run_err):
+            self.assertEqual(psbv.check_gemini_gate(21000), "err")
+            self.assertEqual(piv.check_gemini_gate(21000), "err")
+
+    def test_gemini_filtering_in_publish_sub(self):
+        # Тестируем отбор нод по SUB_REQUIRE_GEMINI=1
+        tmp = tempfile.mkdtemp()
+        sub_from = os.path.join(tmp, "mobile_results.json")
+        out_dir = os.path.join(tmp, "out")
+
+        nodes = [
+            {"name": "N0", "port": 21000, "link": "vless://11111111-1111-1111-1111-111111111111@1.1.1.1:443?security=reality&pbk=abc#GeminiOK1",
+             "delay": 150, "speed": 1.5, "speed_measured": True, "udp": True, "gemini": "ok"},
+            {"name": "N1", "port": 21001, "link": "vless://22222222-2222-2222-2222-222222222222@2.2.2.2:443?security=reality&pbk=abc#GeminiOK2",
+             "delay": 180, "speed": 2.0, "speed_measured": True, "udp": True, "gemini": "ok"},
+            {"name": "N2", "port": 21002, "link": "vless://33333333-3333-3333-3333-333333333333@3.3.3.3:443?security=reality&pbk=abc#GeminiGeoblock",
+             "delay": 120, "speed": 3.0, "speed_measured": True, "udp": True, "gemini": "geoblock"},
+            {"name": "N3", "port": 21003, "link": "vless://44444444-4444-4444-4444-444444444444@4.4.4.4:443?security=reality&pbk=abc#GeminiSorry",
+             "delay": 130, "speed": 2.5, "speed_measured": True, "udp": True, "gemini": "sorry"},
+            {"name": "N4", "port": 21004, "link": "vless://55555555-5555-5555-5555-555555555555@5.5.5.5:443?security=reality&pbk=abc#GeminiErr",
+             "delay": 140, "speed": 1.8, "speed_measured": True, "udp": True, "gemini": "err"},
+        ]
+        with open(sub_from, "w", encoding="utf-8") as f:
+            json.dump(nodes, f)
+
+        # 1. Запуск с SUB_REQUIRE_GEMINI=1
+        env = {
+            "SUB_FROM": sub_from,
+            "SUB_OUT": out_dir,
+            "SUB_REQUIRE_GEMINI": "1",
+            "SUB_MIN_NODES": "2",
+            "SUB_ALLOW_SHRINK": "1",
+            "SUB_NODES": "nodes-yota.txt",
+            "SUB_V2RAY": "yota.txt",
+            "SKIP_XRAY_GATE": "1",
+            "NO_MERGE": "1",
+        }
+        with patch.dict(os.environ, env):
+            ret = ps.main()
+            self.assertEqual(ret, 0)
+
+        with open(os.path.join(out_dir, "nodes-yota.txt"), encoding="utf-8") as f:
+            out_nodes = f.read().splitlines()
+        # Должны остаться ТОЛЬКО ноды с gemini == 'ok' (N0 и N1)
+        self.assertEqual(len(out_nodes), 2)
+        self.assertTrue(any("GeminiOK1" in l for l in out_nodes))
+        self.assertTrue(any("GeminiOK2" in l for l in out_nodes))
+        self.assertFalse(any("GeminiGeoblock" in l for l in out_nodes))
+        self.assertFalse(any("GeminiSorry" in l for l in out_nodes))
+        self.assertFalse(any("GeminiErr" in l for l in out_nodes))
+
+        # Проверяем index.json
+        with open(os.path.join(out_dir, "index.json"), encoding="utf-8") as f:
+            index_data = json.load(f)
+        self.assertTrue(index_data.get("gemini_only"))
+        self.assertEqual(index_data.get("count"), 2)
+
+        # 2. Запуск без SUB_REQUIRE_GEMINI (должны пройти все 5 живых нод)
+        env_all = dict(env)
+        env_all["SUB_REQUIRE_GEMINI"] = "0"
+        env_all["SUB_MIN_NODES"] = "3"
+        with patch.dict(os.environ, env_all):
+            ret = ps.main()
+            self.assertEqual(ret, 0)
+
+        with open(os.path.join(out_dir, "nodes-yota.txt"), encoding="utf-8") as f:
+            out_nodes_all = f.read().splitlines()
+        self.assertEqual(len(out_nodes_all), 5)
 
 
 if __name__ == "__main__":

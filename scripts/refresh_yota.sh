@@ -49,6 +49,7 @@ if ! flock -n 9; then echo "=== $(date -Is) пропуск: идёт друго�
     SUB_ALLOW_SHRINK=1 \
     SUB_NODES=nodes-yota.txt \
     SUB_V2RAY=yota.txt \
+    SUB_REQUIRE_GEMINI=1 \
     SKIP_XRAY_GATE=1 \
     python3 "$B/publish_sub.py" || { echo "fallback: публикация не собралась"; exit 1; }
     python3 "$B/publish_pub.py"        || echo "repo publish yota (fallback) failed"
@@ -68,6 +69,7 @@ if ! flock -n 9; then echo "=== $(date -Is) пропуск: идёт друго�
   SUB_ALLOW_SHRINK=1 \
   SUB_NODES=nodes-yota.txt \
   SUB_V2RAY=yota.txt \
+  SUB_REQUIRE_GEMINI=1 \
   SKIP_XRAY_GATE=1 \
   python3 "$B/publish_sub.py" || echo "публикация yota не удалась"
 

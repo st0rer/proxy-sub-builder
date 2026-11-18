@@ -125,6 +125,68 @@ def curl_probe(port, url, max_time, fmt="%{http_code} %{time_total}"):
     return r.stdout.strip().split()
 
 
+def check_gemini_gate(port, timeout=7):
+    """Проверка доступности Google Gemini и Antigravity (Cloud Code PA).
+
+    1) daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist:
+       POST {} -> 401 (или 200) = локация принята, IP чистый. 400/403 = геоблок / отказ.
+    2) gemini.google.com/app:
+       GET -> 200 = интерфейс Gemini открывается. 403 / sorry = бан IP или капча.
+
+    Возвращает статус: 'ok', 'geoblock', 'sorry' или 'err'.
+    """
+    cmd_lca = [
+        "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+        "--max-time", str(timeout),
+        "-X", "POST", "-H", "Content-Type: application/json", "-d", "{}",
+        "--socks5-hostname", f"127.0.0.1:{port}",
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+    ]
+    try:
+        r_lca = subprocess.run(cmd_lca, capture_output=True, text=True, timeout=timeout + 3)
+        glca = r_lca.stdout.strip()
+    except Exception:
+        glca = "000"
+
+    if glca in ("400", "403"):
+        return "geoblock"
+    if glca not in ("401", "200"):
+        return "err"
+
+    cmd_gem = [
+        "curl", "-s", "-D", "-", "-o", "/dev/null",
+        "--max-time", str(timeout),
+        "--socks5-hostname", f"127.0.0.1:{port}",
+        "https://gemini.google.com/app",
+    ]
+    try:
+        r_gem = subprocess.run(cmd_gem, capture_output=True, text=True, timeout=timeout + 3)
+        hdr = r_gem.stdout
+    except Exception:
+        hdr = ""
+
+    code, loc = "", ""
+    for line in hdr.splitlines():
+        if line.startswith("HTTP/"):
+            parts = line.split()
+            if len(parts) > 1:
+                code = parts[1]
+        elif line.lower().startswith("location:"):
+            loc = line.split(":", 1)[1].strip()
+
+    if code == "200":
+        return "ok"
+    if "sorry" in loc.lower():
+        return "sorry"
+    if code in ("400", "403"):
+        return "geoblock"
+    if code.startswith("3") and "not-available" in loc.lower():
+        return "geoblock"
+    if code.startswith("3") and "sorry" not in loc.lower():
+        return "ok"
+    return code or "err"
+
+
 def main():
     if len(sys.argv) < 4:
         print(__doc__)
@@ -273,6 +335,16 @@ def main():
         with cf.ThreadPoolExecutor(max_workers=par) as ex:
             for r, ip in zip(live0, ex.map(exit_ip, live0)):
                 r["ip"] = ip
+
+        skip_gemini = os.environ.get("SKIP_GEMINI_GATE") == "1"
+        if not skip_gemini and live0:
+            print(f"  проверка гейта Gemini/Antigravity для {len(live0)} живых нод…", flush=True)
+            with cf.ThreadPoolExecutor(max_workers=par) as ex:
+                for r, gres in zip(live0, ex.map(lambda x: check_gemini_gate(x["port"]), live0)):
+                    r["gemini"] = gres
+            gem_ok = sum(1 for r in live0 if r.get("gemini") == "ok")
+            print(f"  гейт Gemini/Antigravity пройден: {gem_ok} из {len(live0)}", flush=True)
+
         # Раньше нода без ответа ipify выбрасывалась. Это ложное отрицание: факт
         # прохождения 16 КБ с CDN уже доказывает, что трафик выходит, а ipify у
         # части выходов блокируется или отвечает дольше 8 с. Оставляем поле как
@@ -280,7 +352,10 @@ def main():
         if os.environ.get("REQUIRE_EXIT_IP") == "1":
             rows = [r for r in rows if not r["delay"] or r.get("ip")]
         traffic = len(nodes) * 0.009
-        live = sorted([r for r in rows if r["delay"]], key=lambda r: r["delay"])
+        # Приоритет в замере скорости: сначала ноды, прошедшие гейт Gemini/Antigravity,
+        # чтобы вписаться в BUDGET_MB именно нужными для работы нодами!
+        live = sorted([r for r in rows if r["delay"]],
+                      key=lambda r: (0 if r.get("gemini") == "ok" else 1, r["delay"]))
         for r in live[:SPEED_TOP]:
             if traffic >= BUDGET_MB:
                 print(f"  бюджет {BUDGET_MB} МБ исчерпан — скорость дальше не меряю", flush=True)
@@ -293,7 +368,7 @@ def main():
                 r["speed"] = 0.0
                 r["speed_measured"] = True
             traffic += 0.5
-            print(f"  скорость {r['speed']:>5.2f} МБ/с  {r['link'][:46]}", flush=True)
+            print(f"  скорость {r['speed']:>5.2f} МБ/с gemini={r.get('gemini', 'skip')}  {r['link'][:44]}", flush=True)
 
         json.dump(rows, open(out_f, "w"))
         print(f"итог: {len(live)} из {len(nodes)} живых, трафик ≈ {traffic:.1f} МБ", flush=True)

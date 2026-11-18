@@ -93,6 +93,10 @@ def main():
             skipped["dup"] += 1
             continue
         seen.add(key)
+        cc = (v.get("cc") or "").upper()
+        gemini = v.get("gemini")
+        if not gemini:
+            gemini = "geoblock" if cc in ("RU", "BY", "IR", "KP", "CN", "") else "ok"
         rows.append({
             "name": f"n100-{i:02d}-{v.get('cc') or '??'}",
             "link": link,
@@ -103,7 +107,8 @@ def main():
             "udp": True,
             "stage": "n100-fallback",
             "ip": v.get("ip") or "",
-            "cc": v.get("cc") or "",
+            "cc": cc,
+            "gemini": gemini,
         })
 
     if TCP_CHECK:

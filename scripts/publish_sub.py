@@ -178,31 +178,41 @@ def load_links():
 MIN_NODES = int(os.environ.get("SUB_MIN_NODES", "10"))
 
 
-def prev_count():
+def prev_count(out_dir=None):
     """Сколько было нод в прошлой подписке — по уникальным подключениям.
 
     Сравнивать сырые строки нельзя: после включения дедупа по подключению
     подписка законно сжимается втрое, и гвард деградации заблокировал бы публикацию.
     """
-    for f in ("nodes.txt",):
-        p = os.path.join(OUT, f)
+    target_out = out_dir or os.environ.get("SUB_OUT") or OUT
+    sub_nodes_name = os.environ.get("SUB_NODES", "nodes.txt")
+    for f in (sub_nodes_name, "nodes.txt"):
+        p = os.path.join(target_out, f)
         if os.path.exists(p):
-            links = [l.strip() for l in open(p) if l.strip()]
+            with open(p, encoding="utf-8", errors="ignore") as fp:
+                links = [l.strip() for l in fp if l.strip()]
             if links:
                 return len({conn_id(l) for l in links})
     try:
-        return int(json.load(open(os.path.join(OUT, "index.json")))["count"])
+        with open(os.path.join(target_out, "index.json"), encoding="utf-8") as fp:
+            return int(json.load(fp)["count"])
     except Exception:
         return 0
 
 
 def main():
     owned = owned_links()
+    req_gemini = os.environ.get("SUB_REQUIRE_GEMINI") == "1" or "--require-gemini" in sys.argv
     # Профиль mobile: источник — результат проверки с малинки (сеть Yota), а не
     # домашний clean_*.txt. Поэтому и квоты, и порог скорости задаются отдельно.
     src = os.environ.get("SUB_FROM")
     if src:
-        rows = json.load(open(src))
+        with open(src, encoding="utf-8") as fp:
+            rows = json.load(fp)
+        if req_gemini:
+            total_live = len([r for r in rows if r.get("delay")])
+            rows = [r for r in rows if r.get("delay") and r.get("gemini") == "ok"]
+            print(f"фильтр Gemini/Antigravity: {total_live} -> {len(rows)} нод")
         links = [r["link"] for r in rows if r.get("delay")]
         links = [l for l in links if re.match(r"^(vless|vmess|hy2|hysteria2|hysteria|trojan|ss|ssr|tuic|anytls|juicity)://", l)]
         # скорость 0.0 = «не мерили»: ключ None, иначе MIN_SPEED выбросит живую ноду
@@ -219,6 +229,22 @@ def main():
         print(f"источник: {os.path.basename(src)} ({len(links)} живых из {len(rows)})")
     else:
         links = load_links() + extra_links()
+        if req_gemini:
+            geo_f = os.environ.get("GEO_PATH") or os.path.join(CACHE, "geo.json")
+            if os.path.exists(geo_f):
+                try:
+                    geo = json.load(open(geo_f))
+                    def is_geo_gemini_ok(l):
+                        pr = ffv.link_to_proxy(l, "x")
+                        if not pr:
+                            return False
+                        k = f"{pr.get('type')}|{pr.get('server')}|{pr.get('port')}"
+                        return geo.get(k, {}).get("gemini") == "ok"
+                    before = len(links)
+                    links = [l for l in links if is_geo_gemini_ok(l)]
+                    print(f"фильтр Gemini/Antigravity (geo.json): {before} -> {len(links)} нод")
+                except Exception as e:
+                    print(f"ошибка чтения geo.json для Gemini фильтра: {e}")
     links = [l for l in links if re.match(r"^(vless|vmess|hy2|hysteria2|hysteria|trojan|ss|ssr|tuic|anytls|juicity)://", l)]
     # порядок в подписке = порядок в клиенте: быстрые вперёд (скорость из verified.json)
     speeds = speeds if src else {}
@@ -303,16 +329,18 @@ def main():
         except Exception as e:
             print(f"xray-фильтр недоступен ({type(e).__name__}) — публикую после mihomo")
 
+    out_dir = os.environ.get("SUB_OUT") or OUT
+    min_nodes = int(os.environ.get("SUB_MIN_NODES", "10"))
     links = owned + [l for l in links if l not in owned]
-    os.makedirs(OUT, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
     if not links:
         print("нет нод — нечего публиковать, старый список не трогаю")
         return 2
     # Защита от деградации: не перезаписывать рабочий список пустым/огрызком.
     # Иначе упавший скан (или блокировка всех источников) тихо портит подписку.
-    prev = prev_count()
-    if len(links) < MIN_NODES:
-        print(f"только {len(links)} нод (< {MIN_NODES}) — публикацию пропускаю, оставляю прошлый список ({prev})")
+    prev = prev_count(out_dir)
+    if len(links) < min_nodes:
+        print(f"только {len(links)} нод (< {min_nodes}) — публикацию пропускаю, оставляю прошлый список ({prev})")
         return 3
     if prev and len(links) < prev * 0.5:
         # Защита от деградации спасает от пустого списка, но мешает, когда старый
@@ -325,8 +353,8 @@ def main():
             print(f"деградация: {len(links)} против {prev} в прошлый раз — пропускаю публикацию")
             return 3
 
-    awrite(os.path.join(OUT, os.environ.get("SUB_NODES", "nodes.txt")), "\n".join(links) + "\n")
-    awrite(os.path.join(OUT, os.environ.get("SUB_V2RAY", "v2ray.txt")),
+    awrite(os.path.join(out_dir, os.environ.get("SUB_NODES", "nodes.txt")), "\n".join(links) + "\n")
+    awrite(os.path.join(out_dir, os.environ.get("SUB_V2RAY", "v2ray.txt")),
            base64.b64encode("\n".join(links).encode()).decode())
 
     # отдельная hy2-only подписка: клиенту на мобильном операторе не нужно
@@ -337,32 +365,33 @@ def main():
     if not hy2_only and os.environ.get("SUB_CAPS"):
         hy2_only = []
     if hy2_only or not os.environ.get("SUB_CAPS"):
-        awrite(os.path.join(OUT, "hy2_nodes.txt"), "\n".join(hy2_only) + "\n")
-        awrite(os.path.join(OUT, "hy2.txt"), base64.b64encode("\n".join(hy2_only).encode()).decode())
+        awrite(os.path.join(out_dir, "hy2_nodes.txt"), "\n".join(hy2_only) + "\n")
+        awrite(os.path.join(out_dir, "hy2.txt"), base64.b64encode("\n".join(hy2_only).encode()).decode())
 
     # протокольные разделы: VLESS, Reality, Shadowsocks
     vless_only = [l for l in links if l.startswith("vless://")]
     if vless_only:
-        awrite(os.path.join(OUT, "vless_nodes.txt"), "\n".join(vless_only) + "\n")
-        awrite(os.path.join(OUT, "vless.txt"), base64.b64encode("\n".join(vless_only).encode()).decode())
+        awrite(os.path.join(out_dir, "vless_nodes.txt"), "\n".join(vless_only) + "\n")
+        awrite(os.path.join(out_dir, "vless.txt"), base64.b64encode("\n".join(vless_only).encode()).decode())
 
     reality_only = [l for l in vless_only if "pbk=" in l or "security=reality" in l]
     if reality_only:
-        awrite(os.path.join(OUT, "reality_nodes.txt"), "\n".join(reality_only) + "\n")
-        awrite(os.path.join(OUT, "reality.txt"), base64.b64encode("\n".join(reality_only).encode()).decode())
+        awrite(os.path.join(out_dir, "reality_nodes.txt"), "\n".join(reality_only) + "\n")
+        awrite(os.path.join(out_dir, "reality.txt"), base64.b64encode("\n".join(reality_only).encode()).decode())
 
     ss_only = [l for l in links if l.startswith("ss://")]
     if ss_only:
-        awrite(os.path.join(OUT, "ss_nodes.txt"), "\n".join(ss_only) + "\n")
-        awrite(os.path.join(OUT, "ss.txt"), base64.b64encode("\n".join(ss_only).encode()).decode())
+        awrite(os.path.join(out_dir, "ss_nodes.txt"), "\n".join(ss_only) + "\n")
+        awrite(os.path.join(out_dir, "ss.txt"), base64.b64encode("\n".join(ss_only).encode()).decode())
 
     cc_map = {}
     try:
         vf_file = os.path.join(CACHE, "verified.json")
         if os.path.exists(vf_file):
-            for v in json.load(open(vf_file)):
-                if isinstance(v, dict) and v.get("link") and v.get("cc"):
-                    cc_map[v["link"]] = v["cc"].strip().upper()
+            with open(vf_file, encoding="utf-8") as fp:
+                for v in json.load(fp):
+                    if isinstance(v, dict) and v.get("link") and v.get("cc"):
+                        cc_map[v["link"]] = v["cc"].strip().upper()
     except Exception:
         pass
 
@@ -405,23 +434,24 @@ def main():
              "  - GEOIP,RU,DIRECT",
              "  - GEOSITE,category-ru,DIRECT",
              "  - MATCH,FALLBACK"]
-    awrite(os.path.join(OUT, "clash.yaml"), "\n".join(body) + "\n")
+    awrite(os.path.join(out_dir, "clash.yaml"), "\n".join(body) + "\n")
 
     pub_files = ["nodes.txt", "v2ray.txt", "clash.yaml", "hy2_nodes.txt", "hy2.txt"]
     if vless_only: pub_files += ["vless_nodes.txt", "vless.txt"]
     if reality_only: pub_files += ["reality_nodes.txt", "reality.txt"]
     if ss_only: pub_files += ["ss_nodes.txt", "ss.txt"]
 
-    awrite(os.path.join(OUT, "index.json"), json.dumps(
+    awrite(os.path.join(out_dir, "index.json"), json.dumps(
         {"updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
          "count": len(links),
          "unique_connections": len({conn_id(l) for l in links}),
+         "gemini_only": req_gemini,
          "files": pub_files,
          "vless_count": len(vless_only),
          "reality_count": len(reality_only),
          "ss_count": len(ss_only),
          "hy2_count": len(hy2_only)}, indent=1))
-    print(f"опубликовано {len(links)} нод -> {OUT}")
+    print(f"опубликовано {len(links)} нод -> {out_dir}")
     return 0
 
 
