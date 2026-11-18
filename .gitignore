@@ -1,8 +1,16 @@
 # секреты и состояние — никогда в репозиторий
 .env
+.env.*
 secrets/
 *.session
 *_token
+*.token
+*.key
+*.pem
+*.crt
+cf_node.json
+*.state
+*.log
 cache/
 out/
 scratch/
@@ -12,3 +20,4 @@ __pycache__/
 *.pyc
 # прочее
 .DS_Store
+*.tmp
