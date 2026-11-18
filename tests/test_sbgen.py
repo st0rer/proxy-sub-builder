@@ -87,8 +87,18 @@ class TestSbGen(unittest.TestCase):
         self.assertNotEqual(gcp["default"], "cf")
         self.assertTrue(any(t.startswith("hyst") or t.startswith("vles") for t in gcp["outbounds"]))
 
-        # Check experimental unified_delay
-        self.assertTrue(cfg.get("experimental", {}).get("unified_delay", {}).get("enabled", False))
+        # By default unified_delay is off for sing-box < 1.14 compatibility
+        self.assertNotIn("unified_delay", cfg.get("experimental", {}))
+
+        # Check that SINGBOX_UNIFIED_DELAY=1 enables it
+        os.environ["SINGBOX_UNIFIED_DELAY"] = "1"
+        try:
+            sbgen.main()
+            with open(self.out_file, encoding="utf-8") as f:
+                cfg_delay = json.load(f)
+            self.assertTrue(cfg_delay.get("experimental", {}).get("unified_delay", {}).get("enabled", False))
+        finally:
+            os.environ.pop("SINGBOX_UNIFIED_DELAY", None)
 
         # Check route rules for antigravity.google and googleapis
         gcp_rule = next((r for r in cfg["route"]["rules"] if r.get("outbound") == "gcp"), None)

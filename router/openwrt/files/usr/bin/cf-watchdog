@@ -32,6 +32,17 @@ try:
 except Exception:
 	pass' "$GCP_JSON" 2>/dev/null || echo "")
 
+# Гейт Google глазами клиента: 401 на loadCodeAssist (ждёт токен) + 200 на gemini.google.com/app.
+# 403 = IP забанен целиком (хостинговые подсети), 400 = геоблок локации. Задержка этого не видит.
+gate_probe() {  # печатает "lca gemini"
+	lca=$(curl -s -o /dev/null -w '%{http_code}' -m 8 -X POST \
+	      -H 'Content-Type: application/json' -d '{}' --socks5-hostname 127.0.0.1:1080 \
+	      https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist 2>/dev/null)
+	g=$(curl -s -o /dev/null -w '%{http_code}' -m 8 --socks5-hostname 127.0.0.1:1080 \
+	    https://gemini.google.com/app 2>/dev/null)
+	echo "${lca:-000} ${g:-000}"
+}
+
 delay_of() {
 	curl -s -m 8 "$API/proxies/$1/delay?timeout=6000&url=$PROBE_URL" 2>/dev/null \
 		| python3 -c 'import json,sys
@@ -59,6 +70,18 @@ if [ "$now" = "cf" ]; then
 	log "gcp стоит на cf (Workers) — немедленная ротация"
 fi
 
+# гейт проверяем всегда: узел может быть жив по задержке и при этом забанен Google
+gate_ok=0
+set -- $(gate_probe)
+glca=${1:-000}; ggem=${2:-000}
+case "$glca" in
+	401|200) [ "$ggem" = "200" ] && gate_ok=1 ;;
+esac
+if [ "$gate_ok" -eq 0 ]; then
+	broken=1
+	log "гейт через $now: loadCodeAssist $glca, gemini $ggem — ротация"
+fi
+
 if [ "$broken" -eq 0 ]; then
 	d=$(delay_of "$now")
 	if [ -n "$d" ] && [ "$d" -gt 0 ]; then
@@ -67,19 +90,27 @@ if [ "$broken" -eq 0 ]; then
 	log "текущий узел $now не отвечает — ротация"
 fi
 
-# Ищем первый живой узел из кандидатов
+# Кандидата проверяем после переключения на него: гейт меряется с текущего выхода
 pick=""
 for n in $candidates; do
 	[ "$n" = "$now" ] && continue
 	d=$(delay_of "$n")
-	if [ -n "$d" ] && [ "$d" -gt 0 ]; then
-		pick="$n"
-		break
-	fi
+	[ -n "$d" ] && [ "$d" -gt 0 ] || continue
+	code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 -X PUT \
+	       -H 'Content-Type: application/json' -d "{\"name\":\"$n\"}" "$API/proxies/$GCP_SELECTOR" 2>/dev/null || echo "000")
+	[ "$code" = "204" ] || { log "  $n: переключение HTTP $code — пропускаю"; continue; }
+	sleep 1
+	clca=$(gate_probe); cgem=$(echo "$clca" | cut -d' ' -f2); clca=$(echo "$clca" | cut -d' ' -f1)
+	case "$clca" in
+		401|200) if [ "$cgem" = "200" ]; then pick="$n"; log "гейт через $n: $clca/$cgem — беру"; break; fi
+		         log "  $n: жив, но гейт $clca/$cgem — пропускаю" ;;
+		*) log "  $n: жив, но гейт $clca/$cgem — пропускаю" ;;
+	esac
 done
 
 if [ -n "$pick" ]; then
 	switch "$pick"
 else
-	log "нет доступных узлов в пуле gcp — оставляю $now"
+	switch "$now"
+	log "нет узлов с проходящим гейтом — оставляю $now"
 fi
