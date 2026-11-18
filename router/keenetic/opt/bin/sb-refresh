@@ -123,9 +123,18 @@ for n in nodes:
 
     geo[key]['gemini'] = 'ok' if code == '200' else ('sorry' if 'sorry' in loc else (code or 'no_resp'))
 
+sw_fail = sum(1 for v in geo.values() if v.get('err') == 'switch_failed')
 json.dump(geo, open(geo_path, 'w'), indent=1, ensure_ascii=False)
-PY
+if sw_fail > max(2, len(nodes) // 3):
+    print('ABORT: переключение не удалось для %d из %d нод — на роутере не тот конфиг' % (sw_fail, len(nodes)))
+    sys.exit(3)
 
+PY
+STATUS=$?
+if [ "$STATUS" -ne 0 ]; then
+	log "ЗАМЕР ПРЕРВАН (код $STATUS) — публикацию отменяю"
+	exit 1
+fi
 # 3. Фильтрация
 log "Генерация отфильтрованного конфига..."
 ARGS="--geo $GEO_FILE --exclude $EXCLUDE_CC"
