@@ -160,5 +160,7 @@ fi
 
 # 5. Атомарное обновление
 mv "$FILTERED_CFG" "$CFG_TARGET"
+# Сбор мусора: удаляем промежуточный тяжелый конфиг полного пула для освобождения tmpfs в RAM
+rm -f "$FULL_CFG" 2>/dev/null || true
 /etc/init.d/sb-client reload >/dev/null 2>&1 || /etc/init.d/sb-client restart >/dev/null 2>&1
 log "Обновление успешно завершено! Конфиг активен."

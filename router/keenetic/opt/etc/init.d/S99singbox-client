@@ -54,6 +54,16 @@ start() {
 
 	setup_cron
 
+	# Ограничение памяти и сборка мусора Go runtime для MIPS/ARM (защита от OOM killer)
+	export GOMEMLIMIT="${GOMEMLIMIT:-45MiB}"
+	export GOGC="${GOGC:-50}"
+
+	# Ротация лога sing-box (держим не более 200 КБ во избежание переполнения диска)
+	if [ -f /opt/var/log/sing-box.log ] && [ "$(wc -c < /opt/var/log/sing-box.log 2>/dev/null || echo 0)" -gt 204800 ]; then
+		tail -n 500 /opt/var/log/sing-box.log > /opt/var/log/sing-box.log.tmp 2>/dev/null && \
+		mv -f /opt/var/log/sing-box.log.tmp /opt/var/log/sing-box.log 2>/dev/null || true
+	fi
+
 	# Запуск в фоне
 	/opt/bin/sing-box $ARGS >/opt/var/log/sing-box.log 2>&1 &
 	sleep 2

@@ -74,6 +74,9 @@ start_service() {
 
 	procd_open_instance "singbox-sub-client"
 	procd_set_param command "$PROG" run -c "$CFG_FILE"
+	# Ограничение памяти и активная сборка мусора Go runtime (GOGC=50, GOMEMLIMIT=40MiB):
+	# предотвращает срабатывание OOM killer на роутерах с 128 МБ RAM
+	procd_set_param env GOMEMLIMIT="${GOMEMLIMIT:-40MiB}" GOGC="${GOGC:-50}"
 	procd_set_param respawn 3600 5 5
 	procd_set_param stdout 1
 	procd_set_param stderr 1

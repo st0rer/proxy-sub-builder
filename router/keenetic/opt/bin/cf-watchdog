@@ -7,7 +7,13 @@ LOG="/opt/var/log/cf-watchdog.log"
 PROBE_URL="https://www.gstatic.com/generate_204"
 GCP_SELECTOR="gcp"
 
-log() { echo "[$(date -u +%F' '%T) UTC] $*" >> "$LOG"; }
+log() {
+	echo "[$(date -u +%F' '%T) UTC] $*" >> "$LOG"
+	# Ротация лога (сбор мусора): держим не более 500 строк во избежание переполнения
+	if [ -f "$LOG" ] && [ "$(wc -l < "$LOG" 2>/dev/null || echo 0)" -gt 500 ]; then
+		tail -n 200 "$LOG" > "$LOG.tmp" 2>/dev/null && mv -f "$LOG.tmp" "$LOG" 2>/dev/null || true
+	fi
+}
 
 if ! pgrep -f "sing-box run" >/dev/null 2>&1; then
 	exit 0

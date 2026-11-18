@@ -159,5 +159,7 @@ if ! /opt/bin/sing-box check -c "$FILTERED_CFG" >/dev/null 2>&1; then
 fi
 
 mv "$FILTERED_CFG" "$CFG_TARGET"
+# Сбор мусора: удаляем промежуточный тяжелый конфиг полного пула
+rm -f "$FULL_CFG" 2>/dev/null || true
 /opt/etc/init.d/S99singbox-client restart >/dev/null 2>&1 || true
 log "Обновление подписки на Keenetic завершено успешно!"
