@@ -202,6 +202,13 @@ def main():
         "google.com", "googleapis.com", "gstatic.com", "googleusercontent.com",
         "google.dev", "antigravity.google", "recaptcha.net",
     ]
+    # видео-стриминг YouTube: выделенный скоростной пул европейских кэшей GGC
+    # с принудительным сбросом QUIC (UDP 443) на стабильный TCP
+    VIDEO_DOMAINS = [
+        "googlevideo.com", "youtube.com", "ytimg.com", "youtubei.googleapis.com",
+        "yt.be", "gvt1.com",
+    ]
+    EU_GEO = {"FI", "SE", "EE", "LV", "LT", "DE", "NL", "PL", "FR", "GB", "CZ", "AT"}
     # фоновые опросы устройств и Chrome: через воркер им не нужно, Gemini они не обслуживают,
     # а квоту жгут постоянно (пуш, проверка связи, автофилл, апдейтер, Play)
     GCP_BYPASS = [
@@ -252,6 +259,25 @@ def main():
         gcp_candidates.append("auto")
     default_gcp = gcp_candidates[0]
 
+    # Пул для YouTube / видео-стриминга (video):
+    # Приоритет: 1) замер скорости (speed_mbps), 2) близость к кэшам Google Video в Европе (EU_GEO),
+    # 3) протоколы VLESS / Hysteria2.
+    def video_rank(ob):
+        k = key_of(ob)
+        g = geo.get(k, {})
+        speed = g.get("speed_mbps") or 0
+        cc = (g.get("cc") or "").upper()
+        is_eu = 1 if cc in EU_GEO else 0
+        is_fast_proto = 1 if ob["type"] in ("vless", "hysteria2") else 0
+        return (speed, is_eu, is_fast_proto)
+
+    video_sorted = sorted(out, key=video_rank, reverse=True)
+    video_candidates = [ob["tag"] for ob in video_sorted[:8] if ob["tag"] != "cf"]
+    if not video_candidates:
+        video_candidates = [t for t in tags[:8] if t != "cf"]
+    if not video_candidates:
+        video_candidates = ["auto"]
+
     proxy_outbounds = ["auto"] + (["cf"] if own else []) + tags
 
     cfg = {
@@ -261,6 +287,13 @@ def main():
             {"type": "urltest", "tag": "auto", "outbounds": tags,
              "url": "https://www.gstatic.com/generate_204",
              "interval": "1m", "tolerance": 30},
+            # video — выделенный скоростной пул для YouTube (минимизирует RTT к GGC кэшам, изолирован от Gemini)
+            {"type": "urltest", "tag": "video-auto", "outbounds": video_candidates,
+             "url": "https://www.gstatic.com/generate_204",
+             "interval": "2m", "tolerance": 25},
+            {"type": "selector", "tag": "video",
+             "outbounds": ["video-auto"] + video_candidates,
+             "default": "video-auto"},
             # gcp — чистый Google-выход (Antigravity/CloudCode/Gemini): ротация по пулу проверенных нод
             {"type": "selector", "tag": "gcp",
              "outbounds": gcp_candidates,
@@ -272,8 +305,21 @@ def main():
             "rules": [
                 # без sniff правила по домену не сработают: из tun приходит только IP
                 {"inbound": sniff_inbounds, "action": "sniff"},
-                # исключения идут ПЕРВЫМИ: в правилах побеждает первое совпадение
+                # 1. Принудительный сброс QUIC (UDP 443) для видеодоменов:
+                # заставляет браузеры мгновенно переключаться на стабильный TCP HTTP/2
+                # без 3-5-секундных таймаутов и дропов пакетов ТСПУ
+                {
+                    "network": "udp",
+                    "port": 443,
+                    "domain_suffix": VIDEO_DOMAINS,
+                    "action": "reject",
+                    "method": "default",
+                },
+                # 2. Видеопотоки YouTube -> выделенный видео-пул
+                {"domain_suffix": VIDEO_DOMAINS, "outbound": "video"},
+                # 3. Исключения фоновых запросов Google -> proxy
                 {"domain_suffix": GCP_BYPASS, "outbound": "proxy"},
+                # 4. Google AI / Antigravity / Gemini -> gcp
                 {"domain_suffix": GCP_DOMAINS, "outbound": "gcp"},
             ],
             "final": "proxy",
@@ -291,7 +337,8 @@ def main():
         json.dump(cfg, f, indent=2)
     print(f"nodes: {len(out)} ({', '.join(sorted({o['type'] for o in out}))})"
           f"{' + own: ' + ','.join(o['tag'] for o in own) if own else ''} -> {out_path}")
-    print(f"google-set -> gcp ({len(GCP_DOMAINS)} доменов), "
+    print(f"video-set -> video ({len(VIDEO_DOMAINS)} доменов), "
+          f"google-set -> gcp ({len(GCP_DOMAINS)} доменов), "
           f"фон Google минус воркер ({len(GCP_BYPASS)}), остальное -> proxy(auto)")
     print(f"dropped: dup={dropped['dup']} geo={dropped['geo']} dead={dropped['dead']} "
           f"gemini={dropped['gemini']} parse={dropped['parse']}")

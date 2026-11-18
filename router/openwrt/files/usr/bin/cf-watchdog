@@ -14,6 +14,52 @@ if ! pgrep -f "sing-box run" >/dev/null 2>&1; then
 	exit 0
 fi
 
+# Точечный сброс залипших видео-соединений YouTube через Clash API
+drop_stalled_video_conns() {
+	python3 - <<'PY'
+import json, urllib.request, time, sys
+
+API = "http://127.0.0.1:9090"
+
+def get_conns():
+    try:
+        req = urllib.request.Request(f"{API}/connections")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            return json.loads(resp.read().decode()).get("connections", [])
+    except Exception:
+        return []
+
+def is_video(c):
+    host = (c.get("metadata", {}).get("host") or "").lower()
+    return "googlevideo.com" in host or "youtube.com" in host
+
+c0 = {c["id"]: c.get("download", 0) for c in get_conns() if is_video(c)}
+if not c0:
+    sys.exit(0)
+
+time.sleep(2)
+
+c1 = {c["id"]: (c.get("download", 0), c.get("metadata", {}).get("host", "")) for c in get_conns() if is_video(c)}
+
+for cid, (dl1, host) in c1.items():
+    if cid in c0:
+        dl0 = c0[cid]
+        if dl1 == dl0:
+            try:
+                del_req = urllib.request.Request(f"{API}/connections/{cid}", method="DELETE")
+                with urllib.request.urlopen(del_req, timeout=2):
+                    pass
+                print(f"сброшено залипшее видео-соединение: {cid[:8]} ({host})")
+            except Exception:
+                pass
+PY
+}
+
+# 1. Проверяем и точечно сбрасываем залипшие соединения YouTube
+drop_stalled_video_conns 2>/dev/null | while IFS= read -r line; do
+	[ -n "$line" ] && log "$line"
+done
+
 GCP_JSON=$(curl -s -m 4 "$API/proxies/$GCP_SELECTOR" 2>/dev/null || echo "")
 if [ -z "$GCP_JSON" ]; then
 	exit 0

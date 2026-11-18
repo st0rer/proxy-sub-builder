@@ -14,7 +14,7 @@ class TestSbGen(unittest.TestCase):
         self.src_file = os.path.join(self.tmpdir, "nodes.txt")
         self.out_file = os.path.join(self.tmpdir, "config.json")
         sample_nodes = [
-            "vless://11111111-2222-3333-4444-555555555555@example.com:443?security=reality&sni=dl.google.com&fp=chrome&pbk=123456&sid=abcd#TestVless",
+            "vless://11111111-2222-3333-4444-555555555555@example.com:443?security=reality&sni=dl.google.com&fp=chrome&pbk=4guBGe6r_cFxgQJeUGvfPCYwcQ2TXURlGOs6vyqH1kY&sid=123456#TestVless",
             "hysteria2://mypassword@hy2.example.com:8443/?sni=myhy2.org#TestHy2",
             "ss://YWVzLTEyOC1nY206cGFzczEyMw==@ss.example.com:8388#TestSS"
         ]
@@ -106,6 +106,44 @@ class TestSbGen(unittest.TestCase):
         domains = gcp_rule.get("domain_suffix", [])
         self.assertIn("antigravity.google", domains)
         self.assertIn("googleapis.com", domains)
+
+    def test_video_routing_and_quic_reject(self):
+        os.environ["SINGBOX_SOURCE"] = self.src_file
+        os.environ["SINGBOX_CONFIG"] = self.out_file
+        sbgen.main()
+
+        with open(self.out_file, encoding="utf-8") as f:
+            cfg = json.load(f)
+
+        # 1. Проверяем наличие селектора video и urltest video-auto
+        video_sel = next((o for o in cfg["outbounds"] if o.get("tag") == "video"), None)
+        self.assertIsNotNone(video_sel)
+        self.assertEqual(video_sel["type"], "selector")
+        self.assertEqual(video_sel["default"], "video-auto")
+
+        video_auto = next((o for o in cfg["outbounds"] if o.get("tag") == "video-auto"), None)
+        self.assertIsNotNone(video_auto)
+        self.assertEqual(video_auto["type"], "urltest")
+
+        # 2. Проверяем правило сброса QUIC (UDP 443) для видеодоменов
+        quic_rule = next((r for r in cfg["route"]["rules"]
+                          if r.get("network") == "udp" and r.get("port") == 443 and r.get("action") == "reject"), None)
+        self.assertIsNotNone(quic_rule)
+        self.assertEqual(quic_rule.get("method"), "default")
+        self.assertIn("googlevideo.com", quic_rule.get("domain_suffix", []))
+        self.assertIn("youtube.com", quic_rule.get("domain_suffix", []))
+
+        # 3. Проверяем правило направления видеодоменов в outbound video
+        video_rule = next((r for r in cfg["route"]["rules"] if r.get("outbound") == "video"), None)
+        self.assertIsNotNone(video_rule)
+        self.assertIn("googlevideo.com", video_rule.get("domain_suffix", []))
+
+        # 4. Проверяем валидность сгенерированного конфига через реальный sing-box check (если бинарник есть)
+        import shutil, subprocess
+        sb_bin = shutil.which("sing-box") or (r"C:\Users\Storer\bin\sing-box.exe" if os.path.exists(r"C:\Users\Storer\bin\sing-box.exe") else None)
+        if sb_bin:
+            res = subprocess.run([sb_bin, "check", "-c", self.out_file], capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0, f"sing-box check failed: {res.stderr}")
 
 if __name__ == "__main__":
     unittest.main()
