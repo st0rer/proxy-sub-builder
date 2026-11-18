@@ -334,7 +334,7 @@ def main():
                     input_bytes=open(os.path.join(paths.SCRIPT_DIR, "pi_sb_verify.py"), "rb").read())
         print(f"проверяю через Yota (малинка, sing-box, нод {sb_used})…")
         r = ssh(f"python3 /opt/vpntest/pi_sb_verify.py {WORK}/sb.json {WORK}/nodes.json "
-                f"{WORK}/out.json", timeout=1200)
+                f"{WORK}/out.json", timeout=int(os.environ.get("PI_TIMEOUT", "2400")))
         if r.returncode:
             print("sing-box не справился, откат на mihomo:",
                   r.stderr.decode(errors="ignore")[-300:])
@@ -342,7 +342,7 @@ def main():
     if engine != "sb" or not sb_used:
         print("проверяю через Yota (малинка, mihomo)…")
         r = ssh(f"python3 /opt/vpntest/pi_verify.py {WORK}/config.yaml {WORK}/nodes.json "
-                f"{WORK}/out.json", timeout=1200)
+                f"{WORK}/out.json", timeout=int(os.environ.get("PI_TIMEOUT", "2400")))
     print((r.stdout.decode(errors="ignore") or "")[-1500:])
     if r.returncode:
         print("ошибка на малинке:", r.stderr.decode(errors="ignore")[-400:])
