@@ -106,6 +106,7 @@ time.sleep(2)
 
 c1 = {c["id"]: (c.get("download", 0), c.get("metadata", {}).get("host", "")) for c in get_conns() if is_video(c)}
 
+dropped = 0
 for cid, (dl1, host) in c1.items():
     if cid in c0:
         dl0 = c0[cid]
@@ -115,22 +116,48 @@ for cid, (dl1, host) in c1.items():
                 with urllib.request.urlopen(del_req, timeout=2):
                     pass
                 print(f"сброшено залипшее видео-соединение: {cid[:8]} ({host})")
+                dropped += 1
             except Exception:
                 pass
+
+if dropped > 0:
+    print("FORCE_VIDEO_RETEST")
 PY
 }
 
 # 1. Проверяем и точечно сбрасываем залипшие соединения YouTube
-drop_stalled_video_conns 2>/dev/null | while IFS= read -r line; do
-    [ -n "$line" ] && log "$line"
-done
+stalls=$(drop_stalled_video_conns 2>/dev/null || true)
+if [ -n "$stalls" ]; then
+    echo "$stalls" | while IFS= read -r line; do
+        if [ "$line" = "FORCE_VIDEO_RETEST" ]; then
+            curl -s -m 6 "$API/proxies/video-auto/delay?timeout=5000&url=$PROBE_URL" >/dev/null 2>&1 || true
+            log "видео-пул video-auto принудительно перепроверен из-за залипания"
+        elif [ -n "$line" ]; then
+            log "$line"
+        fi
+    done
+fi
+
+# 2. Проверяем здоровье селектора video
+VIDEO_JSON=$(curl -s -m 4 "$API/proxies/video" 2>/dev/null || echo "")
+if [ -n "$VIDEO_JSON" ]; then
+    vnow=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("now",""))' "$VIDEO_JSON" 2>/dev/null || echo "")
+    if [ -n "$vnow" ] && [ "$vnow" != "video-auto" ]; then
+        vd=$(curl -s -m 8 "$API/proxies/$vnow/delay?timeout=6000&url=$PROBE_URL" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("delay",0))' 2>/dev/null || echo "0")
+        if [ -z "$vd" ] || [ "${vd:-0}" -le 0 ]; then
+            log "видео-узел $vnow не отвечает — возврат на video-auto"
+            curl -s -o /dev/null -m 4 -X PUT -H 'Content-Type: application/json' \
+                 -d '{"name":"video-auto"}' "$API/proxies/video" 2>/dev/null || true
+        fi
+    fi
+fi
 
 meta=$(curl -s -m 5 "$API/proxies/$GCP_SELECTOR" \
        | python3 -c 'import json,sys
 try:
     d = json.load(sys.stdin)
     now = d.get("now", "")
-    all_nodes = [x for x in d.get("all", []) if x not in ("cf", "auto", "direct")]
+    all_nodes = [x for x in d.get("all", []) if x not in ("cf", "auto", "direct", "video", "video-auto", "proxy")]
     print(now + "|" + " ".join(all_nodes))
 except Exception:
     print("|")' 2>/dev/null)
