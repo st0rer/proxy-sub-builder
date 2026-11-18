@@ -25,6 +25,7 @@ SRC="$SCRATCH/ps_nodes.txt"
 CFG="$SCRATCH/sb-config.json"
 GEO="$SCRATCH/sb-geo.json"
 FULL="$SCRATCH/sb-full.json"
+export SINGBOX_CONFIG="$CFG"   # sbgen по умолчанию пишет /tmp — привязываем к CFG
 EXCLUDE_CC="${SINGBOX_EXCLUDE_CC:-RU}"
 REMOTE_CFG="${SINGBOX_REMOTE_CONFIG:-/etc/sing-box/config.json}"
 LOG_DIR="${SINGBOX_LOG_DIR:-$PROXY_SUB_HOME}"
@@ -159,7 +160,7 @@ log "publishing filtered config (exclude $EXCLUDE_CC)"
 # --strict: ноды, которые не ответили на замер, тоже выкидываем — иначе urltest может
 # выбрать такую и уйти через неизвестную (возможно российскую) страну
 python3 "$GEN" --geo "$GEO" --exclude "$EXCLUDE_CC" --strict --require-gemini || { log "FILTER FAILED"; exit 1; }
-COUNT=$(python3 -c 'import json;c=json.load(open("$CFG"));print(sum(1 for o in c["outbounds"] if o.get("server")))')
+COUNT=$(python3 -c "import json;c=json.load(open('$CFG'));print(sum(1 for o in c['outbounds'] if o.get('server')))")
 log "nodes after filter: $COUNT"
 [ "$COUNT" -ge 5 ] || { log "TOO FEW NODES — остаюсь на полном конфиге"; exit 1; }
 deploy "$CFG" || exit 1
