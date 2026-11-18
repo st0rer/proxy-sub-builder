@@ -42,10 +42,15 @@ deploy() {  # $1 = файл конфига; валидация до подмен
         log "CHECK FAILED — оставляю прежний конфиг"
         return 1
     fi
-    SSH 'mv /tmp/sb-config.new.json "$REMOTE_CFG"
+    # путь подставляется локально: в одинарных кавычках $REMOTE_CFG не раскрывался
+    # и mv уходил в пустой путь — конфиг на роутере оставался старым
+    if ! SSH "mv /tmp/sb-config.new.json '$REMOTE_CFG'
          /etc/init.d/sing-box restart >/dev/null 2>&1
          sleep 45
-         ip route replace default dev sb0 table pbr_sbtun 2>/dev/null'
+         ip route replace default dev sb0 table pbr_sbtun 2>/dev/null"; then
+        log "DEPLOY FAILED — подмена конфига не удалась"
+        return 1
+    fi
     return 0
 }
 
@@ -78,17 +83,17 @@ curl -sf -m 60 -o "$SRC" https://raw.githubusercontent.com/st0rer/proxy-sub/main
 # --- фаза 1: полный конфиг как измерительный стенд ---
 python3 "$GEN" || { log "GENERATE FAILED"; exit 1; }
 cp "$CFG" "$FULL"
-deploy /tmp/sb-full.json || exit 1
+deploy "$FULL" || exit 1
 
 # --- замер страны выхода каждой ноды ---
 log "measuring exit country per node"
 close_tunnel   # на случай, если остался туннель от предыдущего запуска
 sshpass -p "$ROUTER_PASS" ssh -f -N "${SSHOPTS[@]}" -o ExitOnForwardFailure=yes \
-    -L 11080:127.0.0.1:1080 -L 19090:127.0.0.1:9090 "$ROUTER_HOST" || { log "TUNNEL FAILED"; exit 1; }
+    -L 11080:127.0.0.1:1080 -L 11090:127.0.0.1:9090 "$ROUTER_HOST" || { log "TUNNEL FAILED"; exit 1; }
 sleep 3
 
 SINGBOX_FULL="$FULL" python3 - "$GEO" <<'PY'
-import json, os, subprocess, sys
+import json, os, subprocess, sys, time
 
 geo_path = sys.argv[1]
 cfg = json.load(open(os.environ['SINGBOX_FULL']))
@@ -97,10 +102,15 @@ geo = {}
 for n in nodes:
     tag = n['tag']
     key = f"{n['type']}|{n['server']}|{n['server_port']}"
-    sw = subprocess.run(['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', '-m', '5', '-X', 'PUT',
-                         '-H', 'Content-Type: application/json', '-d', json.dumps({'name': tag}),
-                         'http://127.0.0.1:19090/proxies/proxy'],
-                        capture_output=True, text=True).stdout.strip()
+    sw = ''
+    for attempt in range(3):
+        sw = subprocess.run(['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', '-m', '5', '-X', 'PUT',
+                             '-H', 'Content-Type: application/json', '-d', json.dumps({'name': tag}),
+                             'http://127.0.0.1:11090/proxies/proxy'],
+                            capture_output=True, text=True).stdout.strip()
+        if sw == '204':
+            break
+        time.sleep(0.7)
     if sw != '204':
         geo[key] = {'cc': '', 'err': 'switch'}
         continue
@@ -145,13 +155,20 @@ json.dump(geo, open(geo_path, 'w'), indent=1, ensure_ascii=False)
 ccs = {}
 for v in geo.values():
     ccs[v['cc'] or 'нет'] = ccs.get(v['cc'] or 'нет', 0) + 1
+sw_fail = sum(1 for v in geo.values() if v.get('err') == 'switch')
 print('exit countries:', dict(sorted(ccs.items(), key=lambda x: -x[1])))
+if sw_fail > max(2, len(nodes) // 3):
+    print(f'ABORT: переключение не удалось для {sw_fail} из {len(nodes)} нод — '
+          f'конфиг на роутере не совпадает с измерительным (деплой не прошёл?)')
+    sys.exit(3)
 gm = {}
 for v in geo.values():
     k = v.get('gemini') or 'нет'
     gm[k] = gm.get(k, 0) + 1
 print('gemini verdicts:', dict(sorted(gm.items(), key=lambda x: -x[1])))
 PY
+rc=$?
+if [ "$rc" -ne 0 ]; then log "MEASURE ABORT — публикацию отменяю (код $rc)"; exit 1; fi
 
 close_tunnel
 

@@ -279,9 +279,12 @@ def main():
             "final": "proxy",
             "auto_detect_interface": True,
         },
+        # unified_delay знает только sing-box >= 1.14; на 1.13.x роутерный check падает
+        # с "experimental.unified_delay: unknown field". Включается ENV на новых сборках.
         "experimental": {
             "clash_api": {"external_controller": "127.0.0.1:9090"},
-            "unified_delay": {"enabled": True}
+            **({"unified_delay": {"enabled": True}}
+               if os.environ.get("SINGBOX_UNIFIED_DELAY") == "1" else {}),
         },
     }
     with open(out_path, "w", encoding="utf-8") as f:
