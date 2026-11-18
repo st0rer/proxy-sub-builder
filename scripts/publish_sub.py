@@ -239,13 +239,19 @@ def main():
     min_speed = float(min_speed_env) if min_speed_env is not None else 0.0
     if min_speed > 0:
         links = [l for l in links if speeds.get(l, None) is None or speeds.get(l, 0) >= min_speed]
-    # Порядок в списке = приоритет в клиенте. Дома hy2 впереди (TCP там режут),
+    # Порядок в списке = приоритет в клиенте. Дома hy2/tuic впереди (TCP там режут),
     # на Yota наоборот: QUIC не проходит, а vless с рабочим SNI живёт.
     if os.environ.get("SUB_ORDER") == "tcp":
         rank = lambda l: 0 if l.startswith("vless") else 1 if l.startswith("trojan") else 2 if l.startswith("ss") else 3
         links.sort(key=lambda l: (rank(l), -(speeds.get(l) or 0)))
     else:
-        links.sort(key=lambda l: (is_hy2(l), speeds.get(l) or 0), reverse=True)
+        def proto_priority(l):
+            if is_hy2(l) or l.startswith("tuic://"):
+                return 2
+            elif l.startswith("vless://"):
+                return 1
+            return 0
+        links.sort(key=lambda l: (proto_priority(l), speeds.get(l) or 0), reverse=True)
 
     seen, uniq = set(), []
     for l in links:
@@ -257,10 +263,9 @@ def main():
     if len(uniq) != len(links):
         print(f"дедуп по подключению: {len(links)} -> {len(uniq)}")
     links = uniq
-    # Потолок на протокол: подписка не должна расти бесконечно (клиент перебирает
-    # мёртвых), но и не должна стать чисто ss — hy2 на мобильных решает.
-    CAPS = {"hy2": 45, "vless": 60, "ss": 60, "trojan": 20, "vmess": 20,
-            "ssr": 15, "tuic": 15, "anytls": 10, "hysteria": 10}
+    # Потолок на протокол: расширены квоты для устойчивых современных протоколов (hy2, vless, tuic)
+    CAPS = {"hy2": 60, "vless": 80, "ss": 60, "trojan": 25, "vmess": 20,
+            "ssr": 15, "tuic": 30, "anytls": 15, "hysteria": 10}
     if os.environ.get("SUB_CAPS"):
         CAPS.update({k: int(v) for k, v in (x.split("=") for x in os.environ["SUB_CAPS"].split(","))})
     # Потолок на панель: одинаковый ключ = один сервер с разными входными IP.

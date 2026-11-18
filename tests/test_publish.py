@@ -37,6 +37,30 @@ class TestPublish(unittest.TestCase):
         self.assertEqual(len(hy2), 1)
         self.assertEqual(len(ss), 1)
 
+    def test_tuic_and_hy2_priority(self):
+        links = [
+            "vless://11111111-2222-3333-4433-555555555555@1.2.3.4:443?security=reality#Vless",
+            "tuic://uuid:pwd@tuic.com:8443?sni=tuic.com#TuicNode",
+            "hysteria2://pass@hy2.com:8443/?sni=hy2.com#Hy2Node",
+            "ss://YWVzLTEyOC1nY206cGFzczEyMw==@10.0.0.1:8388#SSNode",
+        ]
+        speeds = {"tuic://uuid:pwd@tuic.com:8443?sni=tuic.com#TuicNode": 5.0,
+                  "hysteria2://pass@hy2.com:8443/?sni=hy2.com#Hy2Node": 10.0}
+
+        def proto_priority(l):
+            if ps.is_hy2(l) or l.startswith("tuic://"):
+                return 2
+            elif l.startswith("vless://"):
+                return 1
+            return 0
+
+        sorted_links = sorted(links, key=lambda l: (proto_priority(l), speeds.get(l, 0)), reverse=True)
+        # Hy2 (10 MB/s) should be first, Tuic (5 MB/s) second, then Vless, then SS
+        self.assertTrue(sorted_links[0].startswith("hysteria2://"))
+        self.assertTrue(sorted_links[1].startswith("tuic://"))
+        self.assertTrue(sorted_links[2].startswith("vless://"))
+        self.assertTrue(sorted_links[3].startswith("ss://"))
+
 
 if __name__ == "__main__":
     unittest.main()

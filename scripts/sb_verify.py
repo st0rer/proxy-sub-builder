@@ -36,7 +36,7 @@ TEST_URL = TEST_URLS[0][0]
 BASE_PORT = int(os.environ.get("SB_BASE_PORT", "31000"))
 PAR = int(os.environ.get("SB_PAR", "12"))
 TIMEOUT = int(os.environ.get("SB_TIMEOUT", "10"))
-SPEED_TOP = int(os.environ.get("SB_SPEED_TOP", "8"))
+SPEED_TOP = int(os.environ.get("SB_SPEED_TOP", "25"))
 SPEED_URL = "https://speed.cloudflare.com/__down?bytes=1000000"
 WORKDIR = os.path.join(paths.SCRATCH, "sb_run")
 
@@ -272,16 +272,23 @@ def main():
         with cf.ThreadPoolExecutor(max_workers=PAR) as ex:
             rows = list(ex.map(redo, rows))
     alive = [r for r in rows if r["alive"]]
-    # скорость — только для лучших по задержке
-    for r in sorted(alive, key=lambda x: x["delay"])[:SPEED_TOP]:
+    # Параллельный замер реальной скорости (Speed Gate) для лучших кандидатов
+    speed_candidates = sorted(alive, key=lambda x: x["delay"])[:SPEED_TOP]
+
+    def measure_speed(r):
         tag = next(t for t, m in meta.items() if m["link"] == r["link"])
         rr = subprocess.run(["curl", "-s", "-o", "/dev/null", "-w", "%{speed_download}",
-                             "--max-time", "15", "--socks5-hostname", f"127.0.0.1:{meta[tag]['port']}", SPEED_URL],
+                             "--max-time", "12", "--socks5-hostname", f"127.0.0.1:{meta[tag]['port']}", SPEED_URL],
                             capture_output=True, text=True)
         try:
             r["speed_MBps"] = round(float(rr.stdout.strip() or 0) / 1048576, 2)
         except ValueError:
-            pass
+            r["speed_MBps"] = 0.0
+        return r
+
+    if speed_candidates:
+        with cf.ThreadPoolExecutor(max_workers=min(6, len(speed_candidates))) as ex:
+            list(ex.map(measure_speed, speed_candidates))
     proc.terminate()
     try:
         proc.wait(timeout=5)

@@ -42,6 +42,14 @@ SOURCES = [
     ('matin', 'https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/v2ray/all_sub.txt', 'plain'),
     ('mahan', 'https://raw.githubusercontent.com/MahanKenway/Freedom-V2Ray/main/configs/mix.txt', 'plain'),
     ('alirewa', 'https://raw.githubusercontent.com/Alirewa/V2ray-Configs/main/config.txt', 'plain'),
+    # Новые высокодоходные источники (13k+ проверенных нод: hy2/tuic/vless/ss)
+    ('coldwater_hy2', 'https://raw.githubusercontent.com/coldwater-10/V2ray-Config-Lite/main/Splitted-By-Protocol/hysteria2.txt', 'base64'),
+    ('coldwater_vl', 'https://raw.githubusercontent.com/coldwater-10/V2ray-Config-Lite/main/Splitted-By-Protocol/vless.txt', 'base64'),
+    ('coldwater_tuic', 'https://raw.githubusercontent.com/coldwater-10/V2ray-Config-Lite/main/Splitted-By-Protocol/tuic.txt', 'base64'),
+    ('au1rxx', 'https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/v2ray-base64.txt', 'base64'),
+    ('barry_vl', 'https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/vless.txt', 'plain'),
+    ('barry_ss', 'https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/ss.txt', 'plain'),
+    ('freenodes', 'https://raw.githubusercontent.com/Barabama/FreeNodes/master/nodes/merged.txt', 'plain'),
 ]
 
 # Прямые файлы по стране (если есть в этих репо) — проверяются до общего сбора.
@@ -845,6 +853,11 @@ def collect_and_filter(cc, protos):
                 text = b64_decode(raw)
             else:
                 text = raw.decode(errors='ignore')
+            # Авто-детекция: если в тексте нет '://', пробуем декодировать как base64
+            if '://' not in text[:300] and len(raw) > 50:
+                dec = b64_decode(raw)
+                if '://' in dec[:500]:
+                    text = dec
             links = extract_links(text)
             log(f"  {name}: {len(links)} ссылок")
             all_links += links
