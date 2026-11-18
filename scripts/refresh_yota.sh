@@ -35,7 +35,25 @@ if ! flock -n 9; then echo "=== $(date -Is) пропуск: идёт друго�
   # жива ли малинка по Zerotier
   if ! timeout 12 sshpass -p "${PI_PASS:?не задан PI_PASS}" ssh -o StrictHostKeyChecking=no \
         -o PubkeyAuthentication=no -o ConnectTimeout=8 $PI_HOST true 2>/dev/null; then
-    echo "малинка недоступна по ZT — прогон отменён, подписка не тронута"
+    # ВРЕМЕННЫЙ режим: пока малинка мертва, не оставляем клиентов со старым
+    # yota.txt. Ссылка должна жить, поэтому собираем подписку из живых нод,
+    # проверенных на N100 и отсеянных из домашней (потолки/дедуп/скорость).
+    echo "малинка недоступна по ZT — собираю временную подписку из домашних проверенных нод"
+    python3 "$B/yota_fallback.py" || { echo "fallback: нечего собрать"; exit 1; }
+    SUB_FROM=$VPN_OUT/mobile_fallback.json \
+    SUB_OUT="$OUT" \
+    SUB_CAPS="vless=40,hy2=15,ss=10,trojan=0,vmess=0" \
+    SUB_ORDER=tcp \
+    SUB_MIN_SPEED=0.03 \
+    SUB_MIN_NODES=${SUB_MIN_NODES:-3} \
+    SUB_ALLOW_SHRINK=1 \
+    SUB_NODES=nodes-yota.txt \
+    SUB_V2RAY=yota.txt \
+    SKIP_XRAY_GATE=1 \
+    python3 "$B/publish_sub.py" || { echo "fallback: публикация не собралась"; exit 1; }
+    python3 "$B/publish_pub.py"        || echo "repo publish yota (fallback) failed"
+    python3 "$B/publish_pub.py" --gist || echo "gist publish yota (fallback) failed"
+    echo "=== $(date -Is) done yota (fallback) ==="
     exit 0
   fi
 
