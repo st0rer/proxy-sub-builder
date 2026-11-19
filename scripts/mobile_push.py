@@ -302,7 +302,7 @@ def pick_candidates():
             return -pri
 
         cands.sort(key=vless_cand_pri)
-        check_batch = cands[:needed * 4]
+        check_batch = cands[:needed * 8]
         live_tcp = filter_live_tcp(check_batch)
         for l in live_tcp:
             a = sa._host_of(l)

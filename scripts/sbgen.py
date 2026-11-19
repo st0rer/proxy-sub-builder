@@ -6,7 +6,7 @@
     sbgen.py --geo /tmp/sb-geo.json   # фильтр по стране выхода (исключить RU)
     sbgen.py --exclude RU,BY --strict  # строгий режим: выкинуть и непроверенные ноды
 """
-import base64, json, os, sys, urllib.parse as up
+import base64, json, os, re, sys, urllib.parse as up
 
 # РФ исключаем всегда: для обхода бесполезно, а Google/Gemini отдают геоблок
 DEFAULT_EXCLUDE = {"RU"}
@@ -53,9 +53,12 @@ def parse_vless(u):
 def parse_hy2(u):
     p = up.urlparse(u)
     q = dict(up.parse_qsl(p.query))
-    ob = {"type": "hysteria2", "server": p.hostname, "server_port": p.port,
+    srv = p.hostname or ""
+    is_ip = bool(re.match(r"^\d+\.\d+\.\d+\.\d+$", srv))
+    insecure = (q.get("insecure") in ("1", "true")) or is_ip
+    ob = {"type": "hysteria2", "server": srv, "server_port": p.port,
           "password": p.username or "",
-          "tls": {"enabled": True, "insecure": q.get("insecure") in ("1", "true")}}
+          "tls": {"enabled": True, "insecure": insecure}}
     if q.get("sni"):
         ob["tls"]["server_name"] = q["sni"]
     if q.get("obfs") and q.get("obfs-password"):

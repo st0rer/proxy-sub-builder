@@ -44,9 +44,12 @@ SUPPORTED = {"vless", "vmess", "trojan", "shadowsocks", "ss", "anytls", "tuic", 
 
 
 def tls_block(p, quic=False, enable_fragment=True):
+    srv = p.get("server", "")
+    is_ip = bool(re.match(r"^\d+\.\d+\.\d+\.\d+$", srv))
+    insecure = bool(p.get("skip-cert-verify") or is_ip or quic)
     tls = {"enabled": True,
-           "server_name": p.get("sni") or p.get("servername") or p.get("server") or "",
-           "insecure": bool(p.get("skip-cert-verify"))}
+           "server_name": p.get("sni") or p.get("servername") or srv or "",
+           "insecure": insecure}
     if p.get("alpn"):
         tls["alpn"] = p["alpn"]
     if not quic:   # QUIC-протоколы (hy2/tuic) не умеют uTLS: "unsupported usage for uTLS"

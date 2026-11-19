@@ -440,6 +440,50 @@ def main():
     min_nodes = int(os.environ.get("SUB_MIN_NODES", "10"))
     links = owned + [l for l in links if l not in owned]
     os.makedirs(out_dir, exist_ok=True)
+
+    # Добор до min_nodes для мобильного профиля:
+    # если мобильный прогон дал меньше min_nodes нод, добираем надежные ноды
+    # из mobile_history (с подтвержденной историей работы на Yota) и mobile_fallback
+    if len(links) < min_nodes and (src or "yota" in out_dir.lower()):
+        cands_backfill = []
+        # 1) mobile_history.json
+        if os.path.exists(hist_f):
+            try:
+                with open(hist_f, encoding="utf-8") as fp:
+                    mhist = json.load(fp)
+                for k, v in sorted(mhist.items(), key=lambda x: (x[1].get("speed") or 0.0, x[1].get("runs_ok", 0) / max(1, x[1].get("runs_total", 1))), reverse=True):
+                    if k not in links and v.get("runs_ok", 0) > 0:
+                        sp = v.get("speed") or 0.0
+                        if sp >= min_speed:
+                            cands_backfill.append((k, sp))
+            except Exception:
+                pass
+        # 2) mobile_fallback.json
+        for candidate_dir in [os.environ.get("VPN_OUT", ""), os.path.dirname(out_dir), CACHE]:
+            if not candidate_dir:
+                continue
+            fb_f = os.path.join(candidate_dir, "mobile_fallback.json")
+            if os.path.exists(fb_f):
+                try:
+                    with open(fb_f, encoding="utf-8") as fp:
+                        mfb = json.load(fp)
+                    for item in mfb:
+                        k = item.get("link") if isinstance(item, dict) else item
+                        if k and k not in links and k not in [cb[0] for cb in cands_backfill]:
+                            sp = float(item.get("speed") or 0.1) if isinstance(item, dict) else 0.1
+                            if sp >= min_speed:
+                                cands_backfill.append((k, sp))
+                    break
+                except Exception:
+                    pass
+
+        for k, sp in cands_backfill:
+            links.append(k)
+            speeds[k] = sp
+            if len(links) >= min_nodes:
+                break
+        print(f"добор до {min_nodes} нод: теперь {len(links)} нод в подписке")
+
     if not links:
         print("нет нод — нечего публиковать, старый список не трогаю")
         return 2
