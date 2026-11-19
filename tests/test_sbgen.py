@@ -20,6 +20,10 @@ class TestSbGen(unittest.TestCase):
         ]
         with open(self.src_file, "w", encoding="utf-8") as f:
             f.write("\n".join(sample_nodes))
+        # Детерминированность: «своя» CF-нода из ~/.hermes/secrets/cf_node.json
+        # добавляется в outbounds первой и тоже имеет type=vless, из-за чего
+        # поиск «первого vless» находил её вместо проверяемой ноды.
+        os.environ["SINGBOX_CF_NODE"] = os.path.join(self.tmpdir, "no_cf.json")
 
     def tearDown(self):
         import shutil

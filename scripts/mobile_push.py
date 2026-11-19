@@ -397,6 +397,44 @@ def pick_candidates():
     return picked
 
 
+def prune_invalid_sb(cfg, nodes_list, sb_bin, max_round=15):
+    """Выкидывает ноды, из-за которых sing-box отказывается стартовать.
+
+    `sing-box check` падает на одной битой ноде ('initialize outbound[61]:
+    decode key: illegal base64 data'), а вместе с ней рушится весь прогон:
+    в подписку не попадает ничего. Убираем такие outbounds по одному вместе
+    с их inbound'ом и правилом роутинга, пока конфиг не станет валидным.
+    """
+    import re as _re
+
+    tmp = tempfile.mkdtemp()
+    p = os.path.join(tmp, "sb.json")
+    dropped = []
+    try:
+        for _ in range(max_round):
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False)
+            r = subprocess.run([sb_bin, "check", "-c", p], capture_output=True, text=True)
+            if r.returncode == 0:
+                return nodes_list, True, dropped
+            m = _re.search(r"outbound\[(\d+)\]", r.stderr or "")
+            if not m or int(m.group(1)) >= len(nodes_list):
+                print("sing-box check: " + (r.stderr or "").strip()[-300:])
+                return nodes_list, False, dropped
+            idx = int(m.group(1))
+            n = nodes_list.pop(idx)
+            cfg["outbounds"].pop(idx)
+            tag = "in" + n["name"]
+            cfg["inbounds"] = [i for i in cfg["inbounds"] if i.get("tag") != tag]
+            cfg["route"]["rules"] = [rl for rl in cfg["route"]["rules"] if rl.get("inbound") != [tag]]
+            dropped.append(n)
+            print(f"  выкинул ноду {n['name']} (не проходит sing-box check): {n['link'][:52]}")
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+    return nodes_list, False, dropped
+
+
 def build_config(links):
     proxies, nodes = [], []
     for i, l in enumerate(links):
@@ -478,6 +516,13 @@ def main():
     if not sb_used:
         print("ни одна нода не собралась в конфиг sing-box")
         return 1
+    sb_nodes, sb_valid, dropped_sb = prune_invalid_sb(sb_cfg, sb_nodes, paths.binary("sing-box"))
+    if not sb_valid:
+        print("конфиг sing-box не проходит проверку даже после чистки")
+        return 1
+    sb_used = len(sb_nodes)
+    if dropped_sb:
+        print(f"битых для sing-box: {len(dropped_sb)}, осталось {sb_used}")
     print(f"кандидатов на мобильную проверку (sing-box): {sb_used}")
 
     tmp = tempfile.mkdtemp()
