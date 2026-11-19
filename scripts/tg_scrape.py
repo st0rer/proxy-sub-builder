@@ -57,9 +57,15 @@ POST_ID_RE = re.compile(r'data-post="[^/]+/(\d+)"')
 MENTION_RE = re.compile(r'(?:https?://)?t\.me/(?:s/)?([A-Za-z0-9_]{4,32})')
 SUB_URL_RE = re.compile(r'https?://[A-Za-z0-9.\-]+(?::\d+)?/[A-Za-z0-9_\-./?=&%#@+]+', re.IGNORECASE)
 SUB_IGNORE_DOMAINS = (
-    "t.me", "telegram.me", "telegram.org", "telegra.ph", "youtube.com", "youtu.be",
-    "twitter.com", "x.com", "instagram.com", "facebook.com", "vk.com", "tiktok.com",
-    "play.google.com", "apps.apple.com", "google.com", "yandex.ru"
+    "t.me", "telegram.me", "telegram.org", "telegra.ph", "telesco.pe", "tg.me",
+    "youtube.com", "youtu.be", "twitter.com", "x.com", "instagram.com", "facebook.com",
+    "vk.com", "tiktok.com", "play.google.com", "apps.apple.com", "google.com", "yandex.ru"
+)
+MEDIA_EXTS = (
+    ".mp4", ".mp3", ".ogg", ".wav", ".m4a", ".webm", ".avi", ".mkv", ".mov",
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".ico",
+    ".apk", ".exe", ".dmg", ".iso", ".zip", ".rar", ".7z", ".tar", ".gz",
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx"
 )
 SUB_KEYWORDS = (
     "/sub", "subscribe", "token=", "workers.dev", "pages.dev", "raw.githubusercontent.com",
@@ -174,9 +180,12 @@ def is_candidate_sub(url):
     u = url.lower()
     if any(d in u for d in SUB_IGNORE_DOMAINS):
         return False
+    path = u.split("?")[0].split("#")[0]
+    if any(path.endswith(ext) for ext in MEDIA_EXTS):
+        return False
     if any(k in u for k in SUB_KEYWORDS):
         return True
-    if any(u.split("?")[0].endswith(ext) for ext in SUB_EXTS):
+    if any(path.endswith(ext) for ext in SUB_EXTS):
         return True
     return False
 

@@ -528,7 +528,7 @@ def pick_candidates():
     return picked
 
 
-def prune_invalid_sb(cfg, nodes_list, sb_bin, max_round=100):
+def prune_invalid_sb(cfg, nodes_list, sb_bin, max_round=150):
     """Выкидывает ноды, из-за которых sing-box отказывается стартовать.
 
     `sing-box check` падает на одной битой ноде ('initialize outbound[61]:
@@ -555,11 +555,25 @@ def prune_invalid_sb(cfg, nodes_list, sb_bin, max_round=100):
                 return nodes_list, True, dropped
             if r.returncode == 0:
                 return nodes_list, True, dropped
-            m = _re.search(r"outbound\[(\d+)\]", r.stderr or "")
-            if not m or int(m.group(1)) >= len(nodes_list):
-                print("sing-box check: " + (r.stderr or "").strip()[-300:])
-                return nodes_list, False, dropped
-            idx = int(m.group(1))
+            err_text = r.stderr or ""
+            m = _re.search(r"outbounds?\[(\d+)\]", err_text)
+            idx = None
+            if m and int(m.group(1)) < len(nodes_list):
+                idx = int(m.group(1))
+            else:
+                m_tag = _re.search(r"['\"]?in?(N\d+)['\"]?", err_text)
+                if m_tag:
+                    target_tag = m_tag.group(1)
+                    for i, node in enumerate(nodes_list):
+                        if node.get("name") == target_tag:
+                            idx = i
+                            break
+            if idx is None:
+                print("sing-box check: " + err_text.strip()[-300:])
+                if nodes_list and len(cfg.get("outbounds", [])) > 1:
+                    idx = len(nodes_list) - 1
+                else:
+                    return nodes_list, False, dropped
             n = nodes_list.pop(idx)
             cfg["outbounds"].pop(idx)
             tag = "in" + n["name"]

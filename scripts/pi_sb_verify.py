@@ -23,9 +23,8 @@ SB = "/opt/vpntest/sing-box"
 # 4 живых (27% от достижимых). Причина в том, что gstatic у части выходов режется,
 # а данные при этом ходят. Поэтому три ступени и одна повторная попытка.
 DELAY_STAGES = (
-    ("https://www.gstatic.com/generate_204", 7, "gstatic"),
-    ("http://cp.cloudflare.com/generate_204", 10, "cp-cf"),
-    ("https://speed.cloudflare.com/__down?bytes=16384", 12, "body16k"),
+    ("https://www.gstatic.com/generate_204", 5, "gstatic"),
+    ("http://cp.cloudflare.com/generate_204", 6, "cp-cf"),
 )
 QUIC_PROTOS = ("hy2", "hysteria2", "hysteria", "tuic")
 SPEED_URL = "https://speed.cloudflare.com/__down?bytes=500000"

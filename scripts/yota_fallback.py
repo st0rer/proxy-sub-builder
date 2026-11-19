@@ -76,9 +76,6 @@ def main():
         link = (v.get("link") or "").strip()
         if not link:
             continue
-        if link in published:
-            skipped["published"] += 1
-            continue
         if (v.get("cc") or "").upper() == "RU":
             skipped["RU"] += 1
             continue
