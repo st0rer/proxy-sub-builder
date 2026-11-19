@@ -99,6 +99,25 @@ proxies:
         res_clash = sa.extract_raw_links(clash_yaml)
         self.assertEqual(len(res_clash), 2)
 
+    def test_scrape_web_and_tg_short_b64(self):
+        import scrape_web as sw
+        # Короткий base64-блок (~70-100 символов, который раньше отсекался по {200,})
+        single_link = b"vless://11111111-2222-3333-4444-555555555555@10.20.30.40:443?security=reality#ShortB64"
+        b64_str = __import__("base64").b64encode(single_link).decode()
+        self.assertLess(len(b64_str), 200)
+
+        # Проверяем в scrape_web
+        page_html = f"<html><body><p>Config:</p><code>{b64_str}</code></body></html>"
+        extracted_sw = sw.extract(page_html)
+        self.assertEqual(len(extracted_sw), 1)
+        self.assertIn("ShortB64", extracted_sw[0])
+
+        # Проверяем в tg_scrape
+        tg_html = f'<div class="tgme_widget_message_text">{b64_str}</div>'
+        extracted_tg = tgs.extract(tg_html)
+        self.assertEqual(len(extracted_tg), 1)
+        self.assertIn("ShortB64", extracted_tg[0])
+
 
 if __name__ == "__main__":
     unittest.main()

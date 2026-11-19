@@ -9,76 +9,140 @@
 Результат: $PROXY_SUB_HOME/cache/web_links.txt (по одной ссылке в строке).
 """
 import base64
+import concurrent.futures as cf
+import html
 import json
 import os
 import re
 import sys
+import urllib.parse
+import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import paths
+import find_free_vpn as ffv
 
 OUT = os.path.join(paths.CACHE, "web_links.txt")
 CACHE = os.path.join(paths.CACHE, "web_pages.json")
 
 LINK_RE = re.compile(r"(?:vless|vmess|trojan|ssr|ss|hy2|hysteria2|hysteria|tuic|anytls|juicity)://[^\s\"'<>\\]{10,}")
-B64_RE = re.compile(r"[A-Za-z0-9+/=\r\n]{200,}")
+B64_BLOCK_RE = re.compile(r"[A-Za-z0-9+/=]{36,}")
+
+DEFAULT_URLS = [
+    "https://vpnkeys.me/",
+    "https://vpnkeys.me/klyuchi/vless/",
+    "https://vpnkeys.me/klyuchi/hysteria2/",
+    "https://vpnkeys.me/country/de/",
+    "https://vpnkeys.me/country/nl/",
+    "https://vpnkeys.me/country/fi/",
+    "https://vpnkeys.me/country/se/",
+    "https://vpnkeys.me/country/us/",
+]
 
 
-def decode_blobs(html):
-    """Длинные base64-блобы на страницах — это подписки целиком."""
+def decode_blobs(text):
+    """Декодирует встроенные base64-блоки (от 36 символов) и извлекает ссылки."""
     out = []
-    for blob in B64_RE.findall(html):
+    for blob in B64_BLOCK_RE.findall(text):
         s = re.sub(r"\s+", "", blob)
+        if len(s) % 4 != 0:
+            s += "=" * (-len(s) % 4)
         try:
-            txt = base64.b64decode(s + "=" * (-len(s) % 4)).decode("utf-8", "replace")
+            txt = base64.b64decode(s).decode("utf-8", "replace")
+            out += LINK_RE.findall(txt)
+            if "proxies:" in txt or "proxy-groups:" in txt:
+                out += ffv.clash_to_links(txt)
         except Exception:
             continue
-        out += LINK_RE.findall(txt)
     return out
 
 
-def extract(html):
-    links = LINK_RE.findall(html)
-    links += decode_blobs(html)
-    # html-энтити в query-параметрах ламают парсеры
-    return [l.replace("&amp;", "&").rstrip(".,;)'") for l in links]
+def extract(text):
+    """Извлекает и нормализует все ссылки из HTML-страницы."""
+    links = LINK_RE.findall(text)
+    links += decode_blobs(text)
+    if "proxies:" in text or "proxy-groups:" in text:
+        links += ffv.clash_to_links(text)
+
+    # Чистим сущности &amp; и хвостовые символы
+    cleaned = []
+    for l in links:
+        l = html.unescape(l).rstrip(".,;)'\"<>")
+        cleaned.append(l)
+    return cleaned
 
 
 def fetch(url, stealth=False):
-    from scrapling.fetchers import Fetcher, StealthyFetcher
+    """Многоуровневый загрузчик: Scrapling (если доступен) -> HTTP с Chrome-заголовками."""
     if stealth:
-        page = StealthyFetcher.fetch(url, headless=True, network_idle=True,
-                                     google_search=False, disable_resources=True,
-                                     timeout=60000)
+        try:
+            from scrapling.fetchers import StealthyFetcher
+            page = StealthyFetcher.fetch(url, headless=True, network_idle=True,
+                                         google_search=False, disable_resources=True,
+                                         timeout=60000)
+            return page.html_content
+        except Exception:
+            pass
+
+    try:
+        from scrapling.fetchers import Fetcher
+        page = Fetcher.get(url, stealthy_headers=True, timeout=25)
         return page.html_content
-    page = Fetcher.get(url, stealthy_headers=True, timeout=30)
-    return page.html_content
+    except Exception:
+        pass
+
+    # Нативный HTTP-клиент с заголовками Chrome 131
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Sec-CH-UA": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "Sec-CH-UA-Mobile": "?0",
+        "Sec-CH-UA-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1"
+    }
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return resp.read().decode("utf-8", "replace")
 
 
 def harvest(urls):
+    """Параллельный сбор ссылок со страниц."""
     res, pages = {}, {}
-    for u in urls:
+
+    def scrape_one(u):
         try:
-            html = fetch(u)
+            content = fetch(u)
+            links = extract(content)
+            mode = "static"
+            if len(links) < 3:
+                try:
+                    content_st = fetch(u, stealth=True)
+                    st_links = extract(content_st)
+                    if len(st_links) > len(links):
+                        links = st_links
+                        mode = "stealth"
+                except Exception:
+                    pass
+            return u, {"mode": mode, "links": len(links)}, links
         except Exception as e:
-            res[u] = {"error": str(e)[:80]}
-            continue
-        links = extract(html)
-        mode = "static"
-        if len(links) < 3:
-            try:
-                html = fetch(u, stealth=True)
-                links = extract(html)
-                mode = "stealth"
-            except Exception as e:
-                res[u] = {"error": "stealth: " + str(e)[:60]}
-                continue
-        res[u] = {"mode": mode, "links": len(links)}
-        pages[u] = links
+            return u, {"error": str(e)[:80]}, []
+
+    workers = min(10, max(1, len(urls)))
+    with cf.ThreadPoolExecutor(max_workers=workers) as ex:
+        for u, r, links in ex.map(scrape_one, urls):
+            res[u] = r
+            pages[u] = links
     return res, pages
 
 
-def main(urls):
+def main(urls=None):
+    if not urls:
+        urls = DEFAULT_URLS
     res, pages = harvest(urls)
     for u, r in res.items():
         print(f"{r.get('mode','-'):>8} {r.get('links',0):>4}  {u} {r.get('error','')}")
@@ -88,11 +152,11 @@ def main(urls):
         have = {l.strip() for l in open(OUT) if l.strip()}
     new = [l for l in all_links if l not in have]
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    with open(OUT, "a") as f:
+    with open(OUT, "a", encoding="utf-8") as f:
         for l in new:
             f.write(l + "\n")
     json.dump({u: {"in_page": len(v)} for u, v in pages.items()},
-              open(CACHE, "w"), indent=1, ensure_ascii=False)
+              open(CACHE, "w", encoding="utf-8"), indent=1, ensure_ascii=False)
     print(f"\nвсего со страниц: {len(all_links)}, новых: {len(new)}, в файле: {len(have) + len(new)}")
 
 

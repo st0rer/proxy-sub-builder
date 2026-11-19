@@ -33,7 +33,8 @@ spec.loader.exec_module(tgs)
 def load(path, default):
     if os.path.exists(path):
         try:
-            return json.load(open(path))
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
         except Exception:
             return default
     return default
@@ -41,7 +42,8 @@ def load(path, default):
 
 def save(path, data):
     tmp = path + ".tmp"
-    json.dump(data, open(tmp, "w"), ensure_ascii=False)
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
     os.replace(tmp, path)
 
 

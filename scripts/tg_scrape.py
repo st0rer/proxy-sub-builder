@@ -39,9 +39,20 @@ STATS = os.path.join(CACHE_DIR, "tg_stats.json")
 REJECTED = os.path.join(CACHE_DIR, "tg_rejected.json")   # общий с discover_channels.py
 FETCHED_SUBS = os.path.join(CACHE_DIR, "tg_fetched_subs.json")
 LIST_URL = "https://raw.githubusercontent.com/Surfboardv2ray/TGParse/HEAD/telegramchannels.json"
-UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36"}
+LIST_URLS = [
+    LIST_URL,
+    "https://raw.githubusercontent.com/tahmaseb73/configs-collector-v2ray/HEAD/data/telegram_channels.json",
+    "https://raw.githubusercontent.com/mohamadfg-dev/telegram-v2ray-configs-collector/HEAD/telegram_channels.json",
+    "https://raw.githubusercontent.com/therealaleph/Shin-TG-V2ray-Collector/HEAD/telegram_channels.json",
+]
+UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36"}
+UAS = [
+    {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36"},
+    {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36"},
+    {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0 Safari/537.36"},
+]
 LINK_RE = re.compile(r"(?:vless|vmess|trojan|ssr|ss|hy2|hysteria2|hysteria|tuic|anytls|juicity)://[^\s\"'<>\\]{10,}")
-B64_RE = re.compile(r"[A-Za-z0-9+/=\r\n]{200,}")
+B64_RE = re.compile(r"[A-Za-z0-9+/=\r\n]{36,}")
 POST_ID_RE = re.compile(r'data-post="[^/]+/(\d+)"')
 MENTION_RE = re.compile(r'(?:https?://)?t\.me/(?:s/)?([A-Za-z0-9_]{4,32})')
 SUB_URL_RE = re.compile(r'https?://[A-Za-z0-9.\-]+(?::\d+)?/[A-Za-z0-9_\-./?=&%#@+]+', re.IGNORECASE)
@@ -52,7 +63,10 @@ SUB_IGNORE_DOMAINS = (
 )
 SUB_KEYWORDS = (
     "/sub", "subscribe", "token=", "workers.dev", "pages.dev", "raw.githubusercontent.com",
-    "/api/v1/client/subscribe", "gist.githubusercontent.com", "pastebin.com/raw", "rentry.co"
+    "/api/v1/client/subscribe", "gist.githubusercontent.com", "pastebin.com/raw", "rentry.co",
+    "sub.xeton.dev", "api.v1.mk", "url.v1.mk", "sub.ts-sf", "vercel.app", "railway.app",
+    "onrender.com", "netlify.app", "ghproxy", "fastgit", "cdn.jsdelivr.net", "/api/v1/client/",
+    "export=sub", "format=clash", "format=v2ray", "clash=1"
 )
 SUB_EXTS = (".txt", ".yaml", ".yml", ".json")
 RARE = ("anytls://", "tuic://", "hysteria://", "juicity://")
@@ -80,14 +94,21 @@ def save(path, data):
 
 
 def channels(limit, stats):
-    raw = urllib.request.urlopen(urllib.request.Request(LIST_URL, headers=UA), timeout=30).read()
-    data = json.loads(raw.decode("utf-8", "ignore"))
     names = []
-    for item in (data if isinstance(data, list) else data.get("channels", [])):
-        name = item if isinstance(item, str) else (item.get("username") or item.get("name") or "")
-        name = str(name).strip().lstrip("@").split("/")[-1]
-        if re.fullmatch(r"[A-Za-z0-9_]{4,32}", name):
-            names.append(name)
+    for u in LIST_URLS:
+        try:
+            req = urllib.request.Request(u, headers=UA)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                raw = resp.read()
+            data = json.loads(raw.decode("utf-8", "ignore"))
+            items = data if isinstance(data, list) else data.get("channels", [])
+            for item in items:
+                name = item if isinstance(item, str) else (item.get("username") or item.get("name") or "")
+                name = str(name).strip().lstrip("@").split("/")[-1]
+                if re.fullmatch(r"[A-Za-z0-9_]{4,32}", name):
+                    names.append(name)
+        except Exception:
+            continue
     extra = list(load(DISCOVERED, {}).keys())
     names = sorted(set(names) | set(extra))
     # канал, который DEAD_AFTER прогонов подряд ничего не дал, не тратим время
@@ -110,7 +131,8 @@ def fetch(url):
     last = 0
     for attempt in range(RETRIES):
         try:
-            r = urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=25)
+            headers = UAS[attempt % len(UAS)]
+            r = urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=25)
             return r.read().decode("utf-8", "ignore"), r.status
         except Exception as e:
             last = getattr(e, "code", 0)
@@ -132,35 +154,42 @@ def is_candidate_sub(url):
     return False
 
 
-def fetch_sub_links(url, timeout=6):
+def extract(html):
+    import html as _html
+    links = LINK_RE.findall(html)
+    for blob in B64_RE.findall(html):
+        s = re.sub(r"\s+", "", blob)
+        if len(s) % 4 != 0:
+            s += "=" * (-len(s) % 4)
+        try:
+            txt = base64.b64decode(s).decode("utf-8", "replace")
+            links += LINK_RE.findall(txt)
+            if "proxies:" in txt or "proxy-groups:" in txt:
+                try:
+                    import find_free_vpn as _ffv
+                    links += _ffv.clash_to_links(txt)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    if "proxies:" in html or "proxy-groups:" in html:
+        try:
+            import find_free_vpn as _ffv
+            links += _ffv.clash_to_links(html)
+        except Exception:
+            pass
+    return [_html.unescape(l).rstrip(".,;)'\"<>") for l in links]
+
+
+def fetch_sub_links(url, timeout=8):
     try:
         req = urllib.request.Request(url, headers=UA)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read(512 * 1024)
         text = raw.decode("utf-8", "ignore")
-        found = LINK_RE.findall(text)
-        if not found:
-            s = re.sub(r"\s+", "", text)
-            try:
-                dec = base64.b64decode(s + "=" * (-len(s) % 4)).decode("utf-8", "replace")
-                found = LINK_RE.findall(dec)
-            except Exception:
-                pass
-        return [l.replace("&amp;", "&").rstrip(".,;)'") for l in found]
+        return extract(text)
     except Exception:
         return []
-
-
-def extract(html):
-    links = LINK_RE.findall(html)
-    for blob in B64_RE.findall(html):
-        s = re.sub(r"\s+", "", blob)
-        try:
-            txt = base64.b64decode(s + "=" * (-len(s) % 4)).decode("utf-8", "replace")
-            links += LINK_RE.findall(txt)
-        except Exception:
-            pass
-    return [l.replace("&amp;", "&").rstrip(".,;)'") for l in links]
 
 
 def scan_channel(name, cursor, depth, fetched_subs=None):
