@@ -63,15 +63,15 @@ if ! flock -n 9; then echo "=== $(date -Is) пропуск: идёт друго�
 
   SUB_FROM=$VPN_OUT/mobile_results.json \
   SUB_OUT="$OUT" \
-  SUB_CAPS="vless=60,ss=30,hy2=10,anytls=15,trojan=10,tuic=0,vmess=0" \
+  SUB_CAPS="vless=60,hy2=30,anytls=30,trojan=30,ss=15,tuic=10,vmess=0" \
   SUB_MAX_PER_PANEL=6 \
   SUB_ORDER=tcp \
   SUB_MIN_SPEED=0.03 \
-  SUB_MIN_NODES=${SUB_MIN_NODES:-3} \
+  SUB_MIN_NODES=${SUB_MIN_NODES:-20} \
   SUB_ALLOW_SHRINK=1 \
   SUB_NODES=nodes-yota.txt \
   SUB_V2RAY=yota.txt \
-  SUB_REQUIRE_GEMINI=1 \
+  SUB_REQUIRE_GEMINI=${SUB_REQUIRE_GEMINI:-0} \
   SKIP_XRAY_GATE=1 \
   python3 "$B/publish_sub.py" || echo "публикация yota не удалась"
 

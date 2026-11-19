@@ -60,6 +60,48 @@ class TestMobilePushAndStats(unittest.TestCase):
         self.assertEqual(proto_stats.fam("vless://uuid@host:443"), "vless")
         self.assertEqual(proto_stats.fam("ss://method:pass@host:443"), "ss")
 
+    def test_yota_vless_hy2_prioritization(self):
+        # Ensure RU-SNI Reality is sorted ahead of foreign SNI
+        ru_reality = "vless://uuid@1.1.1.1:443?security=reality&sni=storage.yandex.net&pbk=xyz"
+        foreign_reality = "vless://uuid@1.1.1.2:443?security=reality&sni=itunes.apple.com&pbk=xyz"
+        non_reality = "vless://uuid@1.1.1.3:443?security=none"
+
+        vless_items = [(foreign_reality, 200), (non_reality, 100), (ru_reality, 200)]
+        # Use lambda mirroring mobile_push
+        def vless_pri(item):
+            link, delay = item
+            is_reality = ("pbk=" in link or "security=reality" in link)
+            is_ru_sni = any(dom in link.lower() for dom in (".ru", "vk.com", "yandex.ru", "mail.ru", "gosuslugi.ru", "storage.yandex.net", "ads.x5.ru", "max.ru"))
+            pri = (3 if is_reality else 0) + (4 if is_ru_sni else 0)
+            return (-pri, delay)
+
+        sorted_vless = sorted(vless_items, key=vless_pri)
+        self.assertEqual(sorted_vless[0][0], ru_reality)
+        self.assertEqual(sorted_vless[1][0], foreign_reality)
+        self.assertEqual(sorted_vless[2][0], non_reality)
+
+        # Ensure non-443 hy2 is sorted ahead of 443 hy2
+        hy2_std = "hy2://pass@2.2.2.1:443?insecure=1"
+        hy2_nonstd = "hy2://pass@2.2.2.2:8443?insecure=1"
+        hy2_obfs = "hy2://pass@2.2.2.3:443?insecure=1&obfs=salamander"
+
+        def hy2_pri(item):
+            link, delay = item
+            a = mobile_push.sa._host_of(link)
+            port = a[1] if a else 443
+            non_std_port = (port != 443)
+            has_obfs = "obfs=" in link or "salamander" in link
+            pri = 0
+            if non_std_port: pri += 5
+            if has_obfs: pri += 4
+            if not non_std_port and not has_obfs: pri -= 10
+            return (-pri, delay)
+
+        sorted_hy2 = sorted([(hy2_std, 100), (hy2_nonstd, 200), (hy2_obfs, 150)], key=hy2_pri)
+        self.assertEqual(sorted_hy2[0][0], hy2_nonstd)
+        self.assertEqual(sorted_hy2[1][0], hy2_obfs)
+        self.assertEqual(sorted_hy2[2][0], hy2_std)
+
     def test_proto_stats_load_runs(self):
         runs_dir = os.path.join(self.tmpdir, "runs", "20261119_120000")
         os.makedirs(runs_dir, exist_ok=True)

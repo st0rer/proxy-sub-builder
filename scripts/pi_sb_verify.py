@@ -29,8 +29,8 @@ DELAY_STAGES = (
 )
 QUIC_PROTOS = ("hy2", "hysteria2", "hysteria", "tuic")
 SPEED_URL = "https://speed.cloudflare.com/__down?bytes=500000"
-SPEED_TOP = int(os.environ.get("SPEED_TOP", "10"))
-BUDGET_MB = float(os.environ.get("BUDGET_MB", "12"))
+SPEED_TOP = int(os.environ.get("SPEED_TOP", "30"))
+BUDGET_MB = float(os.environ.get("BUDGET_MB", "20"))
 DELAY_TIMEOUT = int(os.environ.get("DELAY_TIMEOUT", "7"))
 DNS_Q = bytes.fromhex("abcd01000001000000000000076578616d706c6503636f6d0000010001")
 

@@ -38,10 +38,10 @@ OUT = os.path.join(paths.OUT, "mobile_results.json")
 CACHE = paths.CACHE
 N_HY2 = int(os.environ.get("PI_N_HY2", "60"))
 N_VLESS = int(os.environ.get("PI_N_VLESS", "120"))
-N_SS = int(os.environ.get("PI_N_SS", "60"))
-N_ANYTLS = int(os.environ.get("PI_N_ANYTLS", "15"))
-N_TUIC = int(os.environ.get("PI_N_TUIC", "2"))
-N_TROJAN = int(os.environ.get("PI_N_TROJAN", "60"))
+N_SS = int(os.environ.get("PI_N_SS", "20"))
+N_ANYTLS = int(os.environ.get("PI_N_ANYTLS", "30"))
+N_TUIC = int(os.environ.get("PI_N_TUIC", "10"))
+N_TROJAN = int(os.environ.get("PI_N_TROJAN", "40"))
 N_POOL = int(os.environ.get("PI_N_POOL", "120"))  # добор из пула
 N_SIB = int(os.environ.get("PI_N_SIB", "60"))     # адреса рабочих панелей (выход 45% против 8%)
 PER_ADDR = 2
@@ -177,31 +177,34 @@ def pick_candidates():
         link, delay = item
         # Reality и RU-SNI первыми, так как они лучше всего проходят ТСПУ мобильных сетей
         is_reality = ("pbk=" in link or "security=reality" in link)
-        is_ru_sni = any(dom in link for dom in (".ru", "vk.com", "yandex.ru", "mail.ru", "gosuslugi.ru"))
+        is_ru_sni = any(dom in link.lower() for dom in (".ru", "vk.com", "yandex.ru", "mail.ru", "gosuslugi.ru", "storage.yandex.net", "ads.x5.ru", "max.ru"))
+        a = sa._host_of(link)
+        non_std_port = (a[1] != 443) if a else False
         pri = 0
-        if is_reality: pri += 2
-        if is_ru_sni: pri += 1
+        if is_reality: pri += 3
+        if is_ru_sni: pri += 4
+        if non_std_port: pri += 2
         return (-pri, delay)
 
     def hy2_pri(item):
         link, delay = item
-        # На Yota порт UDP 443 режется оператором: штрафуем 443 без обфускации
+        # На Yota порт UDP 443 режется оператором: приоритет non-443 и obfs
         a = sa._host_of(link)
         port = a[1] if a else 443
         non_std_port = (port != 443)
         has_obfs = "obfs=" in link or "salamander" in link
         pri = 0
-        if non_std_port: pri += 3
-        if has_obfs: pri += 2
-        if not non_std_port and not has_obfs: pri -= 5
+        if non_std_port: pri += 5
+        if has_obfs: pri += 4
+        if not non_std_port and not has_obfs: pri -= 10
         return (-pri, delay)
 
     groups["vless"].sort(key=vless_pri)
     groups["hy2"].sort(key=hy2_pri)
 
     picked, per_addr = [], {}
-    for f, budget in (("hy2", N_HY2), ("vless", N_VLESS), ("ss", N_SS),
-                      ("anytls", N_ANYTLS), ("tuic", N_TUIC), ("trojan", N_TROJAN)):
+    for f, budget in (("anytls", N_ANYTLS), ("hy2", N_HY2), ("vless", N_VLESS),
+                      ("trojan", N_TROJAN), ("ss", N_SS), ("tuic", N_TUIC)):
         taken = 0
         for link, delay in groups[f]:
             a = sa._host_of(link)
@@ -239,11 +242,42 @@ def pick_candidates():
     else:
         mtested = {}
     now_ts = int(time.time())
-    mtested = {k: v for k, v in mtested.items() if now_ts - v < 2 * 86400}
+    # 2 часа локаута вместо 48 ч, чтобы не морить пул голодом при разовых мобильных сбоях
+    mtested = {k: v for k, v in mtested.items() if now_ts - v < 7200}
 
     picked_set = set(picked)
 
-    # 1) Добор VLESS (Reality в приоритете)
+    # 0) Добор Hysteria 2 из пула (только non-443 или obfs!)
+    hy2_count = sum(1 for l in picked if l.startswith(("hy2://", "hysteria2://", "hysteria://")))
+    if hy2_count < N_HY2 and pool:
+        needed = N_HY2 - hy2_count
+        cands = []
+        for l in pool:
+            if not l.startswith(("hy2://", "hysteria2://", "hysteria://")) or l in picked_set or l in known_ru or l in mtested:
+                continue
+            a = sa._host_of(l)
+            if not a or a[0] in known_blocked_ips or per_addr.get(a, 0) >= PER_ADDR:
+                continue
+            port = a[1] if a else 443
+            non_std_port = (port != 443)
+            has_obfs = "obfs=" in l or "salamander" in l
+            if not non_std_port and not has_obfs:
+                continue
+            pri = (3 if non_std_port and has_obfs else (2 if non_std_port else (1 if has_obfs else 0)))
+            cands.append((l, pri))
+        cands.sort(key=lambda x: -x[1])
+        for l, _ in cands:
+            a = sa._host_of(l)
+            if not a or per_addr.get(a, 0) >= PER_ADDR:
+                continue
+            per_addr[a] = per_addr.get(a, 0) + 1
+            picked.append(l)
+            picked_set.add(l)
+            hy2_count += 1
+            if hy2_count >= N_HY2:
+                break
+
+    # 1) Добор VLESS (Reality с RU-SNI и non-443 в высшем приоритете)
     vless_count = sum(1 for l in picked if l.startswith("vless://"))
     if vless_count < N_VLESS and pool:
         needed = N_VLESS - vless_count
@@ -255,8 +289,20 @@ def pick_candidates():
             if not a or a[0] in known_blocked_ips or per_addr.get(a, 0) >= PER_ADDR:
                 continue
             cands.append(l)
-        cands.sort(key=lambda l: 0 if ("pbk=" in l or "security=reality" in l) else 1)
-        check_batch = cands[:needed * 3]
+
+        def vless_cand_pri(l):
+            is_reality = ("pbk=" in l or "security=reality" in l)
+            is_ru = any(dom in l.lower() for dom in (".ru", "vk.com", "yandex.ru", "mail.ru", "gosuslugi.ru", "storage.yandex.net", "ads.x5.ru", "max.ru"))
+            a = sa._host_of(l)
+            is_non_443 = (a[1] != 443) if a else False
+            pri = 0
+            if is_reality: pri += 10
+            if is_ru: pri += 20
+            if is_non_443: pri += 5
+            return -pri
+
+        cands.sort(key=vless_cand_pri)
+        check_batch = cands[:needed * 4]
         live_tcp = filter_live_tcp(check_batch)
         for l in live_tcp:
             a = sa._host_of(l)
@@ -269,7 +315,32 @@ def pick_candidates():
             if vless_count >= N_VLESS:
                 break
 
-    # 2) Добор Shadowsocks
+    # 2) Добор Trojan из пула
+    tr_count = sum(1 for l in picked if l.startswith("trojan://"))
+    if tr_count < N_TROJAN and pool:
+        needed = N_TROJAN - tr_count
+        cands = []
+        for l in pool:
+            if not l.startswith("trojan://") or l in picked_set or l in known_ru or l in mtested:
+                continue
+            a = sa._host_of(l)
+            if not a or a[0] in known_blocked_ips or per_addr.get(a, 0) >= PER_ADDR:
+                continue
+            cands.append(l)
+        check_batch = cands[:needed * 3]
+        live_tcp = filter_live_tcp(check_batch)
+        for l in live_tcp:
+            a = sa._host_of(l)
+            if not a or per_addr.get(a, 0) >= PER_ADDR:
+                continue
+            per_addr[a] = per_addr.get(a, 0) + 1
+            picked.append(l)
+            picked_set.add(l)
+            tr_count += 1
+            if tr_count >= N_TROJAN:
+                break
+
+    # 3) Добор Shadowsocks
     ss_count = sum(1 for l in picked if l.startswith("ss://"))
     if ss_count < N_SS and pool:
         needed = N_SS - ss_count

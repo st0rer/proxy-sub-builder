@@ -137,6 +137,10 @@ def calc_node_score(hist_entry, speed=None):
     if fails > 0:
         score *= (0.5 ** min(fails, 4))
 
+    # Бонус за подтверждённый доступ к Gemini/Antigravity
+    if hist_entry and isinstance(hist_entry, dict) and hist_entry.get("gemini") == "ok":
+        score += 0.25
+
     return round(score, 4)
 
 
@@ -238,12 +242,14 @@ def main():
         with open(src, encoding="utf-8") as fp:
             rows = json.load(fp)
         if req_gemini:
-            total_live = len([r for r in rows if r.get("delay")])
-            rows = [r for r in rows if r.get("delay") and r.get("gemini") == "ok"]
-            print(f"фильтр Gemini/Antigravity: {total_live} -> {len(rows)} нод")
+            total_live_rows = [r for r in rows if r.get("delay")]
+            total_live = len(total_live_rows)
+            gemini_rows = [r for r in total_live_rows if r.get("gemini") == "ok"]
+            print(f"фильтр Gemini/Antigravity: {total_live} -> {len(gemini_rows)} нод")
+            min_nodes_req = int(os.environ.get("SUB_MIN_NODES", "10"))
+            rows = gemini_rows
             # Защита от ложного отсева при джиттере мобильного канала: если в текущем
             # прогоне прошло меньше min_nodes, добираем подтверждённые Gemini-ноды из недавней истории (до 24 ч)
-            min_nodes_req = int(os.environ.get("SUB_MIN_NODES", "10"))
             if len(rows) < min_nodes_req:
                 hist_p = os.path.join(CACHE, "mobile_history.json")
                 if os.path.exists(hist_p):
@@ -279,6 +285,20 @@ def main():
                             print(f"добор из mobile_history (Gemini ok, < 24ч): +{added_hist} нод -> всего {len(rows)}")
                     except Exception:
                         pass
+            # Если даже после истории проверенных Gemini-нод меньше min_nodes_req,
+            # добираем из живых рабочих нод текущего прогона, чтобы не оставлять клиентов с пустой подпиской!
+            if len(rows) < min_nodes_req:
+                curr_links = {r["link"] for r in rows}
+                needed = min_nodes_req - len(rows)
+                other_live = [r for r in total_live_rows if r["link"] not in curr_links]
+                other_live.sort(key=lambda r: (-(float(r.get("speed") or 0.0)), r.get("delay", 9999)))
+                added_other = 0
+                for r in other_live[:needed]:
+                    rows.append(r)
+                    curr_links.add(r["link"])
+                    added_other += 1
+                if added_other:
+                    print(f"добор живых быстрых нод для квоты {min_nodes_req}: +{added_other} нод -> всего {len(rows)}")
         links = [r["link"] for r in rows if r.get("delay")]
         links = [l for l in links if re.match(r"^(vless|vmess|hy2|hysteria2|hysteria|trojan|ss|ssr|tuic|anytls|juicity)://", l)]
         # скорость 0.0 = «не мерили»: ключ None, иначе MIN_SPEED выбросит живую ноду
