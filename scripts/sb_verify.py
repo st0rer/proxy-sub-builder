@@ -137,8 +137,8 @@ def to_singbox(p, tag):
         # hysteria2 работает только поверх ALPN h3 — без него рукопожатие не поднимется
         tls["alpn"] = tls.get("alpn") or ["h3"]
         ob["tls"] = tls
-        if p.get("obfs"):
-            ob["obfs"] = {"type": p["obfs"], "password": p.get("obfs-password", "")}
+        if p.get("obfs") and p.get("obfs-password"):
+            ob["obfs"] = {"type": p["obfs"], "password": p["obfs-password"]}
     else:
         return None
     return ob

@@ -528,7 +528,7 @@ def pick_candidates():
     return picked
 
 
-def prune_invalid_sb(cfg, nodes_list, sb_bin, max_round=15):
+def prune_invalid_sb(cfg, nodes_list, sb_bin, max_round=100):
     """Выкидывает ноды, из-за которых sing-box отказывается стартовать.
 
     `sing-box check` падает на одной битой ноде ('initialize outbound[61]:

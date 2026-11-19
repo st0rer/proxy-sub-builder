@@ -58,8 +58,8 @@ def parse_hy2(u):
           "tls": {"enabled": True, "insecure": q.get("insecure") in ("1", "true")}}
     if q.get("sni"):
         ob["tls"]["server_name"] = q["sni"]
-    if q.get("obfs"):
-        ob["obfs"] = {"type": q["obfs"], "password": q.get("obfs-password", "")}
+    if q.get("obfs") and q.get("obfs-password"):
+        ob["obfs"] = {"type": q["obfs"], "password": q["obfs-password"]}
     return ob
 
 
