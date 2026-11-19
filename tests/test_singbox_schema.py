@@ -32,6 +32,7 @@ class TestSingboxSchema(unittest.TestCase):
         self.assertEqual(tls["reality"]["short_id"], "123456")
         # Проверяем TLS ClientHello fragmentation для обхода DPI/ТСПУ
         self.assertTrue(tls.get("fragment"))
+        self.assertTrue(tls.get("record_fragment"))
         self.assertEqual(tls.get("fragment_fallback_delay"), "500ms")
 
     def test_unsupported_flow_excluded_in_sb_verify(self):

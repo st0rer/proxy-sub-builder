@@ -53,6 +53,9 @@ class TestSbGen(unittest.TestCase):
         self.assertIn("auto", tags)
         self.assertIn("gcp", tags)
         self.assertIn("proxy", tags)
+        vless_ob = next((o for o in outbounds if o.get("type") == "vless"), None)
+        self.assertIsNotNone(vless_ob)
+        self.assertTrue(vless_ob.get("tls", {}).get("record_fragment"))
 
     def test_sbgen_tproxy_mode(self):
         os.environ["SINGBOX_SOURCE"] = self.src_file

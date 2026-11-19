@@ -349,6 +349,149 @@ class TestPublish(unittest.TestCase):
         self.assertIn("vless://uuid@1.1.1.2:443?security=reality#LiveVless", filtered)
         self.assertNotIn("ss://pass@1.1.1.3:8388#DeadSS", filtered)
 
+    def test_calc_node_score(self):
+        # 1. Проверенная временем нода (10 из 10, скорость 2.0 МБ/с)
+        # rel = 11/12 = 0.9167; sp_factor = 2.0/3.0 = 0.6667
+        # score = 0.9167 * 0.6 + 0.6667 * 0.4 = 0.550 + 0.2667 = 0.8167
+        stable_entry = {"runs_ok": 10, "runs_total": 10, "consecutive_fails": 0, "speed": 2.0}
+        score_stable = ps.calc_node_score(stable_entry)
+
+        # 2. Новая нода-однодневка (1 из 1, скорость 10.0 МБ/с)
+        # rel = 2/3 = 0.6667; sp_factor = 1.0
+        # score = 0.6667 * 0.6 + 1.0 * 0.4 = 0.400 + 0.400 = 0.8000
+        flash_entry = {"runs_ok": 1, "runs_total": 1, "consecutive_fails": 0, "speed": 10.0}
+        score_flash = ps.calc_node_score(flash_entry)
+
+        # Проверенная нода должна выиграть по надежности у случайной быстрой новинки
+        self.assertGreater(score_stable, score_flash)
+
+        # 3. Штраф за падения: нода с consecutive_fails = 2 должна сильно просесть
+        failing_entry = {"runs_ok": 8, "runs_total": 10, "consecutive_fails": 2, "speed": 2.0}
+        score_failing = ps.calc_node_score(failing_entry)
+        self.assertLess(score_failing, score_stable * 0.5)
+
+        # 4. Fallback без истории: не падает, возвращает адекватный скор
+        score_empty = ps.calc_node_score(None, speed=1.5)
+        self.assertGreater(score_empty, 0.0)
+
+    def test_score_ranking_in_publish_sub(self):
+        import time
+        tmp = tempfile.mkdtemp()
+        sub_from = os.path.join(tmp, "mobile_results.json")
+        out_dir = os.path.join(tmp, "out")
+        hist_p = os.path.join(tmp, "mobile_history.json")
+
+        link_stable = "vless://11111111-1111-1111-1111-111111111111@1.1.1.1:443?security=reality&pbk=abc#StableNode"
+        link_flash = "vless://22222222-2222-2222-2222-222222222222@2.2.2.2:443?security=reality&pbk=abc#FlashNode"
+
+        # В результатах замера: FlashNode быстрее (15 МБ/с против 2 МБ/с)
+        nodes = [
+            {"name": "N1", "port": 21001, "link": link_flash, "delay": 80, "speed": 15.0, "speed_measured": True, "udp": True, "gemini": "ok"},
+            {"name": "N0", "port": 21000, "link": link_stable, "delay": 120, "speed": 2.0, "speed_measured": True, "udp": True, "gemini": "ok"},
+        ]
+        with open(sub_from, "w", encoding="utf-8") as f:
+            json.dump(nodes, f)
+
+        # Но в истории: StableNode имеет 10 успешных запусков, а FlashNode - только 1
+        now_ts = time.time()
+        mhist = {
+            link_stable: {"ts": now_ts, "runs_ok": 10, "runs_total": 10, "consecutive_fails": 0, "speed": 2.0, "gemini": "ok"},
+            link_flash: {"ts": now_ts, "runs_ok": 1, "runs_total": 1, "consecutive_fails": 0, "speed": 15.0, "gemini": "ok"},
+        }
+        with open(hist_p, "w", encoding="utf-8") as f:
+            json.dump(mhist, f)
+
+        env = {
+            "SUB_FROM": sub_from,
+            "SUB_OUT": out_dir,
+            "SUB_REQUIRE_GEMINI": "1",
+            "SUB_MIN_NODES": "2",
+            "SUB_ORDER": "tcp",
+            "SUB_NODES": "nodes-yota.txt",
+            "SUB_V2RAY": "yota.txt",
+            "SKIP_XRAY_GATE": "1",
+            "NO_MERGE": "1",
+            "PROXY_SUB_CACHE": tmp,
+        }
+        with patch.dict(os.environ, env), patch("publish_sub.CACHE", tmp):
+            ret = ps.main()
+            self.assertEqual(ret, 0)
+
+        with open(os.path.join(out_dir, "nodes-yota.txt"), encoding="utf-8") as f:
+            lines = [l.strip() for l in f if l.strip()]
+
+        # Проверенная нода StableNode должна быть первой благодаря Reliability Score!
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(lines[0], link_stable)
+        self.assertEqual(lines[1], link_flash)
+
+    def test_mobile_push_history_decay_and_score_update(self):
+        import time
+        tmp = tempfile.mkdtemp()
+        hist_p = os.path.join(tmp, "mobile_history.json")
+
+        # Предыдущая история: NodeA уже имела 2 успешных прогона
+        link_a = "vless://11111111-1111-1111-1111-111111111111@1.1.1.1:443?security=reality#NodeA"
+        link_b = "vless://22222222-2222-2222-2222-222222222222@2.2.2.2:443?security=reality#NodeB"
+        now_ts = int(time.time())
+        prev_hist = {
+            link_a: {"ts": now_ts - 3600, "runs_ok": 2, "runs_total": 2, "consecutive_fails": 0, "speed": 1.5, "gemini": "ok"},
+            link_b: {"ts": now_ts - 3600, "runs_ok": 5, "runs_total": 5, "consecutive_fails": 0, "speed": 2.0, "gemini": "ok"},
+        }
+        with open(hist_p, "w", encoding="utf-8") as f:
+            json.dump(prev_hist, f)
+
+        # Результаты нового прогона: NodeA прошла успешно, NodeB упала
+        rows = [
+            {"link": link_a, "delay": 100, "speed": 2.5, "speed_measured": True, "udp": True, "gemini": "ok"},
+            {"link": link_b, "delay": None, "speed": 0.0, "speed_measured": False, "udp": False, "gemini": "error"},
+        ]
+
+        live = [x for x in rows if x.get("delay") and not (x.get("speed_measured") and (x.get("speed") or 0) < 0.03)]
+        with open(hist_p, encoding="utf-8") as fp:
+            hist = json.load(fp)
+        now = int(time.time())
+        live_set = {x["link"] for x in live}
+        for x in rows:
+            link = x["link"]
+            is_live = link in live_set
+            prev = hist.get(link, {})
+            prev_ok = prev.get("runs_ok", 1 if prev.get("ts") else 0)
+            prev_total = prev.get("runs_total", 1 if prev.get("ts") else 0)
+            runs_ok = prev_ok + (1 if is_live else 0)
+            runs_total = prev_total + 1
+            fails = 0 if is_live else (prev.get("consecutive_fails", 0) + 1)
+            sp = x.get("speed") or (prev.get("speed") if is_live else 0) or 0
+            gem = x.get("gemini") if is_live else prev.get("gemini")
+
+            rel = (runs_ok + 1.0) / (runs_total + 2.0)
+            sp_factor = min(1.0, max(0.0, float(sp) / 3.0))
+            sc = rel * 0.6 + sp_factor * 0.4
+            if fails > 0:
+                sc *= (0.5 ** min(fails, 4))
+            sc = round(sc, 4)
+
+            if is_live:
+                hist[link] = {
+                    "ts": now, "speed": sp, "delay": x.get("delay"),
+                    "gemini": gem, "runs_ok": runs_ok, "runs_total": runs_total,
+                    "consecutive_fails": 0, "score": sc
+                }
+            elif link in hist:
+                hist[link]["runs_total"] = runs_total
+                hist[link]["consecutive_fails"] = fails
+                hist[link]["score"] = sc
+
+        self.assertEqual(hist[link_a]["runs_ok"], 3)
+        self.assertEqual(hist[link_a]["runs_total"], 3)
+        self.assertEqual(hist[link_a]["consecutive_fails"], 0)
+        self.assertGreater(hist[link_a]["score"], 0.7)
+
+        self.assertEqual(hist[link_b]["runs_ok"], 5)
+        self.assertEqual(hist[link_b]["runs_total"], 6)
+        self.assertEqual(hist[link_b]["consecutive_fails"], 1)
+        self.assertLess(hist[link_b]["score"], 0.5)
+
 
 if __name__ == "__main__":
     unittest.main()

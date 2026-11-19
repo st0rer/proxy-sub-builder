@@ -54,6 +54,7 @@ def tls_block(p, quic=False, enable_fragment=True):
         if enable_fragment:
             # Фрагментация ClientHello для обхода мобильного ТСПУ/DPI (Yota/Мегафон)
             tls["fragment"] = True
+            tls["record_fragment"] = True
             tls["fragment_fallback_delay"] = "500ms"
     ro = p.get("reality-opts") or {}
     if p.get("reality-opts"):

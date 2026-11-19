@@ -112,6 +112,34 @@ def cc_to_flag(cc):
     return ""
 
 
+def calc_node_score(hist_entry, speed=None):
+    """Вычисляет оценку надёжности (Reliability Score).
+
+    Использует байесовское сглаживание по истории проверок (runs_ok / runs_total)
+    и нормализованный замер скорости. Нода с 10 подтверждёнными прогонами
+    ранжируется выше ноды с 1 случайным всплеском скорости.
+    При недавних падениях (consecutive_fails > 0) применяется экспоненциальный штраф.
+    """
+    sp = float(speed if speed is not None else (hist_entry.get("speed") if isinstance(hist_entry, dict) else 0) or 0.0)
+    sp_factor = min(1.0, max(0.0, sp / 3.0))
+
+    if not hist_entry or not isinstance(hist_entry, dict):
+        return round(0.5 * 0.6 + sp_factor * 0.4, 4)
+
+    runs_ok = hist_entry.get("runs_ok", 1 if hist_entry.get("ts") else 0)
+    runs_total = hist_entry.get("runs_total", 1 if hist_entry.get("ts") else 0)
+    fails = hist_entry.get("consecutive_fails", 0)
+
+    # Байесовское сглаживание: (ok + 1) / (total + 2)
+    rel = (runs_ok + 1.0) / (runs_total + 2.0)
+    score = rel * 0.6 + sp_factor * 0.4
+
+    if fails > 0:
+        score *= (0.5 ** min(fails, 4))
+
+    return round(score, 4)
+
+
 def extra_links():
     """EXTRA_LINKS=<file> — добавить ноды из другого набора (например, прошлые
     проверенные vless, когда текущий прогон собран только по hy2).
@@ -225,9 +253,16 @@ def main():
                         now_ts = time.time()
                         curr_links = {r["link"] for r in rows}
                         added_hist = 0
-                        for l, info in sorted(mhist.items(), key=lambda kv: -kv[1].get("ts", 0)):
+                        # Добираем проверенные Gemini-ноды: первыми идут ноды с наивысшим score и свежим ts
+                        def repl_key(item):
+                            _, info = item
+                            sc = info.get("score") if info.get("score") is not None else calc_node_score(info)
+                            return (-sc, -info.get("ts", 0))
+                        for l, info in sorted(mhist.items(), key=repl_key):
                             if l in curr_links:
                                 continue
+                            if info.get("consecutive_fails", 0) > 0:
+                                continue  # Не добирать ноды, упавшие в недавних проверках
                             if info.get("gemini") == "ok" and (now_ts - info.get("ts", 0) < 86400):
                                 rows.append({
                                     "link": l,
@@ -296,11 +331,26 @@ def main():
     min_speed = float(min_speed_env) if min_speed_env is not None else 0.0
     if min_speed > 0:
         links = [l for l in links if speeds.get(l, None) is None or speeds.get(l, 0) >= min_speed]
+
+    # Расчёт Reliability Score (байесовская надёжность + затухание истории + скорость)
+    hist_f = os.path.join(CACHE, "mobile_history.json" if src else "history.json")
+    hist_data = {}
+    if os.path.exists(hist_f):
+        try:
+            with open(hist_f, encoding="utf-8") as fp:
+                hd = json.load(fp)
+                if isinstance(hd, dict):
+                    hist_data = hd
+        except Exception:
+            pass
+    scores = {l: calc_node_score(hist_data.get(l), speeds.get(l)) for l in links}
+
     # Порядок в списке = приоритет в клиенте. Дома hy2/tuic впереди (TCP там режут),
     # на Yota наоборот: QUIC не проходит, а vless с рабочим SNI живёт.
+    # Внутри протокола первыми идут ноды с наивысшей надёжностью (Score)
     if os.environ.get("SUB_ORDER") == "tcp":
         rank = lambda l: 0 if l.startswith("vless") else 1 if l.startswith("trojan") else 2 if l.startswith("ss") else 3
-        links.sort(key=lambda l: (rank(l), -(speeds.get(l) or 0)))
+        links.sort(key=lambda l: (rank(l), -scores.get(l, 0.0), -(speeds.get(l) or 0)))
     else:
         def proto_priority(l):
             if is_hy2(l) or l.startswith("tuic://"):
@@ -308,7 +358,7 @@ def main():
             elif l.startswith("vless://"):
                 return 1
             return 0
-        links.sort(key=lambda l: (proto_priority(l), speeds.get(l) or 0), reverse=True)
+        links.sort(key=lambda l: (proto_priority(l), scores.get(l, 0.0), speeds.get(l) or 0), reverse=True)
 
     seen, uniq = set(), []
     for l in links:

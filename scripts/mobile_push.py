@@ -381,7 +381,9 @@ def pick_candidates():
         def hist_sort_key(item):
             _, v = item
             is_gem = 1 if v.get("gemini") == "ok" else 0
-            return (-is_gem, -v.get("ts", 0))
+            fails = v.get("consecutive_fails", 0)
+            score = v.get("score", 0)
+            return (-is_gem, fails, -score, -v.get("ts", 0))
         for link, _v in sorted(hist.items(), key=hist_sort_key):
             if link in have or link in known_ru:
                 continue
@@ -523,11 +525,39 @@ def main():
     hist_p = os.path.join(CACHE, "mobile_history.json")
     hist = json.load(open(hist_p)) if os.path.exists(hist_p) else {}
     now = int(time.time())
-    for x in live:
-        hist[x["link"]] = {"ts": now, "speed": x.get("speed") or 0, "delay": x.get("delay"),
-                           "gemini": x.get("gemini")}
-    hist = {k: v for k, v in hist.items() if now - v.get("ts", 0) < 7 * 86400}
-    json.dump(hist, open(hist_p, "w"))
+    live_set = {x["link"] for x in live}
+    for x in rows:
+        link = x["link"]
+        is_live = link in live_set
+        prev = hist.get(link, {})
+        prev_ok = prev.get("runs_ok", 1 if prev.get("ts") else 0)
+        prev_total = prev.get("runs_total", 1 if prev.get("ts") else 0)
+        runs_ok = prev_ok + (1 if is_live else 0)
+        runs_total = prev_total + 1
+        fails = 0 if is_live else (prev.get("consecutive_fails", 0) + 1)
+        sp = x.get("speed") or (prev.get("speed") if is_live else 0) or 0
+        gem = x.get("gemini") if is_live else prev.get("gemini")
+
+        # Байесовский скор надёжности
+        rel = (runs_ok + 1.0) / (runs_total + 2.0)
+        sp_factor = min(1.0, max(0.0, float(sp) / 3.0))
+        sc = rel * 0.6 + sp_factor * 0.4
+        if fails > 0:
+            sc *= (0.5 ** min(fails, 4))
+        sc = round(sc, 4)
+
+        if is_live:
+            hist[link] = {
+                "ts": now, "speed": sp, "delay": x.get("delay"),
+                "gemini": gem, "runs_ok": runs_ok, "runs_total": runs_total,
+                "consecutive_fails": 0, "score": sc
+            }
+        elif link in hist:
+            hist[link]["runs_total"] = runs_total
+            hist[link]["consecutive_fails"] = fails
+            hist[link]["score"] = sc
+    hist = {k: v for k, v in hist.items() if now - v.get("ts", 0) < 7 * 86400 and v.get("consecutive_fails", 0) < 5}
+    json.dump(hist, open(hist_p, "w"), ensure_ascii=False, indent=1)
     json.dump(rows, open(OUT, "w"), ensure_ascii=False, indent=1)
     tf = os.path.join(CACHE, "mobile_tested.json")
     hist_t = json.load(open(tf)) if os.path.exists(tf) else {}
@@ -537,8 +567,9 @@ def main():
     gem_ok = [x for x in live if x.get("gemini") == "ok"]
     print(f"из Yota живых: {len(live)} из {len(rows)} -> {OUT}")
     print(f"из них проверено для Gemini/Antigravity: {len(gem_ok)} из {len(live)}")
-    for x in sorted(live, key=lambda y: -(y.get("speed") or 0))[:5]:
-        print(f"   {(x.get('speed') or 0):>5.2f} МБ/с {x['delay']:>5} мс udp={'да' if x['udp'] else 'нет'} "
+    for x in sorted(live, key=lambda y: -hist.get(y["link"], {}).get("score", 0))[:5]:
+        sc = hist.get(x["link"], {}).get("score", 0)
+        print(f"   [score: {sc:.3f}] {(x.get('speed') or 0):>5.2f} МБ/с {x['delay']:>5} мс "
               f"gemini={x.get('gemini', 'skip')} {x['link'][:44]}")
     return 0
 

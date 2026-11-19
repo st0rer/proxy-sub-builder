@@ -34,6 +34,8 @@ def parse_vless(u):
                               "short_id": q.get("sid", "")}
             if "utls" not in tls:  # reality требует uTLS, иначе "uTLS is required by reality client"
                 tls["utls"] = {"enabled": True, "fingerprint": "chrome"}
+        # Защита от блокировки ТСПУ/DPI на сотовых и стационарных сетях (sing-box >= 1.12)
+        tls["record_fragment"] = True
         ob["tls"] = tls
     t = q.get("type", "tcp")
     if t == "grpc":
