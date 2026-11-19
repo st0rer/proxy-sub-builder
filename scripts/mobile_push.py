@@ -20,6 +20,7 @@ import os
 import socket
 import subprocess
 import time
+import shutil
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
@@ -592,6 +593,21 @@ def main():
         print("не забрал результат")
         return 4
     rows = json.loads(r.stdout.decode())
+    # Снимок прогона: по нему считается отдача каждого протокола (сколько
+    # отправлено -> сколько прошло TCP -> сколько живых). Без этого квоты
+    # настраиваются наугад. Храним последние 20 прогонов.
+    try:
+        runs_dir = os.path.join(CACHE, "runs")
+        d = os.path.join(runs_dir, time.strftime("%Y%m%d-%H%M"))
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "run.json"), "w", encoding="utf-8") as f:
+            json.dump({"ts": int(time.time()), "sent": sb_nodes, "out": rows}, f,
+                      ensure_ascii=False)
+        olds = sorted(x for x in os.listdir(runs_dir) if x[:8].isdigit())
+        for x in olds[:-20]:
+            shutil.rmtree(os.path.join(runs_dir, x), ignore_errors=True)
+    except Exception as e:
+        print(f"снимок прогона не сохранён: {e}")
     # 0.0 при speed_measured=True значит «мерили и не поехало» — такие ноды в
     # подписке бесполезны (именно так туда попали воркер-заглушки с 204).
     MIN_SPEED = float(os.environ.get("PI_MIN_SPEED", "0.03"))
