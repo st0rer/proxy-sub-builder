@@ -125,6 +125,16 @@ SOURCES = {
     "acymz":            "acymz/AutoVPN/main/data/V2.txt",
     "youfoundamin":     "youfoundamin/V2rayCollector/main/mixed_iran.txt",
     "cidvpn":           "CidVpn/cid-vpn-config/main/general.txt",
+    # Свежие проверенные репозитории (ноябрь 2026): Mahdi0024, tahmaseb, nyeinkokoaung, anaer, ermaozi
+    "mahdi0024":        "Mahdi0024/ProxyCollector/master/sub/proxies.txt",
+    "tahmaseb_ss":      "tahmaseb73/configs-collector-v2ray/main/data/sub/protocols/shadowsocks.txt",
+    "tahmaseb_trojan":  "tahmaseb73/configs-collector-v2ray/main/data/sub/protocols/trojan.txt",
+    "coldwater_ss":     "coldwater-10/V2ray-Config-Lite/main/Splitted-By-Protocol/ss.txt",
+    "nyeinkoko_all":    "nyeinkokoaung404/V2ray-Configs/main/All_Configs_Sub.txt",
+    "nyeinkoko_vl":     "nyeinkokoaung404/V2ray-Configs/main/Splitted-By-Protocol/vless.txt",
+    "anaer_clash":      "https://raw.githubusercontent.com/anaer/Sub/main/clash.yaml",
+    "ermaozi_v2":       "ermaozi/get_subscribe/main/subscribe/v2ray.txt",
+    "ermaozi_clash":    "https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/clash.yml",
 }
 def daily_sources():
     """Свежие файлы каталогов-зеркал: node.<домен>/uploads/YYYY/MM/YYYYMMDD.txt.
@@ -299,43 +309,111 @@ def probe_delay(port, name, timeout=4000, tries=2):
     return best
 
 
+B64_BLOCK_RE = re.compile(r"[A-Za-z0-9+/=]{40,}")
+
+
+def extract_raw_links(raw_bytes):
+    """Универсальное извлечение ссылок из сырых байтов источника:
+    1. html.unescape для очистки сущностей (&amp; ломал 10k+ Reality ссылок).
+    2. Прямой поиск протоколов через LINK_RE.
+    3. URL-декодирование (для ссылок вида vless%3A%2F%2F).
+    4. Base64 декодирование всего текста с добивкой паддинга.
+    5. Поиск встроенных Base64-блоков (для файлов с шапками/комментариями).
+    6. Извлечение нод из Clash YAML (clash_to_links).
+    """
+    import base64
+    import html
+    links = set()
+    text = raw_bytes.decode("utf-8", "replace")
+
+    # 1. Прямой поиск
+    for l in LINK_RE.findall(text):
+        links.add(html.unescape(l))
+
+    # 2. Поиск URL-закодированных ссылок
+    if "%3A%2F%2F" in text or "%3a%2f%2f" in text:
+        try:
+            unquoted = urllib.parse.unquote(text)
+            for l in LINK_RE.findall(unquoted):
+                links.add(html.unescape(l))
+        except Exception:
+            pass
+
+    # 3. Декодирование всего файла как Base64
+    stripped = "".join(text.split())
+    if len(stripped) >= 16:
+        pad = "=" * (-len(stripped) % 4)
+        try:
+            dec = base64.b64decode(stripped + pad).decode("utf-8", "replace")
+            for l in LINK_RE.findall(dec):
+                links.add(html.unescape(l))
+            if "proxies:" in dec or "proxy-groups:" in dec:
+                for l in ffv.clash_to_links(dec):
+                    links.add(html.unescape(l))
+        except Exception:
+            pass
+
+    # 4. Поиск встроенных base64-блоков (для файлов с комментариями/шапками)
+    for block in B64_BLOCK_RE.findall(text):
+        pad = "=" * (-len(block) % 4)
+        try:
+            dec = base64.b64decode(block + pad).decode("utf-8", "replace")
+            for l in LINK_RE.findall(dec):
+                links.add(html.unescape(l))
+            if "proxies:" in dec or "proxy-groups:" in dec:
+                for l in ffv.clash_to_links(dec):
+                    links.add(html.unescape(l))
+        except Exception:
+            pass
+
+    # 5. Clash YAML в исходном тексте
+    if "proxies:" in text or "proxy-groups:" in text:
+        for l in ffv.clash_to_links(text):
+            links.add(html.unescape(l))
+
+    return links
+
+
 # ------------------------------------------------------------------ режимы
 def collect():
+    import concurrent.futures as cf
+    import html
     os.makedirs(RAW, exist_ok=True)
     os.makedirs(CACHE, exist_ok=True)
     links = set()
-    for name, path in list(SOURCES.items()) + list(daily_sources().items()) + list(dynamic_community_sources().items()):
+    all_src = list(SOURCES.items()) + list(daily_sources().items()) + list(dynamic_community_sources().items())
+
+    def fetch_source(item):
+        name, path = item
+        url = path if str(path).startswith("http") else RAW_BASE + path
         try:
-            # в SOURCES встречаются и относительные пути (клеим к RAW_BASE),
-            # и готовые URL (файлы каталогов по дате) — вторые не трогаем
-            url = path if str(path).startswith("http") else RAW_BASE + path
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=45) as r:
+            with urllib.request.urlopen(req, timeout=40) as r:
                 raw = r.read()
             open(os.path.join(RAW, name + ".txt"), "wb").write(raw)
-            text = raw.decode("utf-8", "replace")
-            if not LINK_RE.search(text):
-                try:
-                    dec = __import__("base64").b64decode(text.strip() + "=" * (-len(text.strip()) % 4)).decode("utf-8", "replace")
-                    if LINK_RE.search(dec):
-                        text = dec
-                except Exception:
-                    pass
-            found = set(LINK_RE.findall(text))
-            links |= found
-            print(f"{name:14} {len(raw):>9}B links={len(found)}")
+            found = extract_raw_links(raw)
+            return name, found, len(raw), None
         except Exception as e:
-            print(f"{name:14} ERR {str(e)[:60]}")
+            return name, set(), 0, str(e)
+
+    with cf.ThreadPoolExecutor(max_workers=16) as ex:
+        for name, found, raw_len, err in ex.map(fetch_source, all_src):
+            if err:
+                print(f"{name:14} ERR {err[:60]}")
+            else:
+                links |= found
+                print(f"{name:14} {raw_len:>9}B links={len(found)}")
+
     # ссылки со сайтов-каталогов (bin/scrape_web.py через Scrapling): их нет
     # в GitHub-списках, а часть сайтов отдаёт ключи только в HTML
     WEB_F = os.path.join(paths.CACHE, "web_links.txt")
     if os.path.exists(WEB_F):
-        web = {l.strip() for l in open(WEB_F) if l.strip()}
+        web = {html.unescape(l.strip()) for l in open(WEB_F) if l.strip()}
         print(f"{'web_scrape':14} {'':>9} links={len(web)}")
         links |= web
     # хвосты после '#' — это чужие ссылки/эмодзи, они ломают YAML: отрезаем
     links = {re.split(r"#", l)[0] for l in links}
-    links = {ffv.normalize_link(l) for l in links}   # чиним перепутанные схемы
+    links = {ffv.normalize_link(html.unescape(l)) for l in links}   # чиним перепутанные схемы
     # vmess идёт base64-блоком без "@", ss бывает в legacy-форме — фильтр по схеме,
     # а не по наличию "@", иначе теряется половина источников
     # Фильтр по схеме + проверка, что ссылка вообще разбирается в proxy.

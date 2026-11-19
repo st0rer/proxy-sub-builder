@@ -77,6 +77,28 @@ class TestScraper(unittest.TestCase):
         self.assertEqual(added_count[0], 1)
         self.assertIn(target_url, fetched)
 
+    def test_extract_raw_links_enhanced(self):
+        import scan_any as sa
+        # 1. HTML entities (&amp;)
+        sample_html = b"vless://uuid1@1.2.3.4:443?security=reality&amp;sni=test.com&amp;pbk=4guBGe6r_cFxgQJeUGvfPCYwcQ2TXURlGOs6vyqH1kY#Node1"
+        res = sa.extract_raw_links(sample_html)
+        self.assertTrue(any("&sni=test.com" in l and "&amp;" not in l for l in res))
+
+        # 2. Embedded Base64 block in comments
+        b64_part = __import__("base64").b64encode(b"vless://uuid2@5.6.7.8:443?security=reality#B64Node\nss://YWVzLTEyOC1nY206cGFzczEyMw==@9.10.11.12:8388#SSNode").decode()
+        sample_b64 = f"# Hello world\n# Header comment\n{b64_part}\n# End comment".encode()
+        res_b64 = sa.extract_raw_links(sample_b64)
+        self.assertEqual(len(res_b64), 2)
+
+        # 3. Clash YAML with proxies
+        clash_yaml = b"""
+proxies:
+  - {name: N1, type: vless, server: 2.3.4.5, port: 443, uuid: 11111111-2222-3333-4444-555555555555, tls: true, reality-opts: {public-key: 4guBGe6r_cFxgQJeUGvfPCYwcQ2TXURlGOs6vyqH1kY}, servername: my.site.com}
+  - {name: N2, type: ss, server: 3.4.5.6, port: 8388, cipher: aes-128-gcm, password: pass}
+"""
+        res_clash = sa.extract_raw_links(clash_yaml)
+        self.assertEqual(len(res_clash), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

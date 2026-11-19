@@ -61,6 +61,15 @@ SOURCES = [
     ('acymz', 'https://raw.githubusercontent.com/acymz/AutoVPN/main/data/V2.txt', 'base64'),
     ('youfoundamin', 'https://raw.githubusercontent.com/youfoundamin/V2rayCollector/main/mixed_iran.txt', 'plain'),
     ('cidvpn', 'https://raw.githubusercontent.com/CidVpn/cid-vpn-config/main/general.txt', 'plain'),
+    # Свежие репозитории (ноябрь 2026): Mahdi0024, tahmaseb, nyeinkokoaung, anaer, ermaozi
+    ('mahdi0024', 'https://raw.githubusercontent.com/Mahdi0024/ProxyCollector/master/sub/proxies.txt', 'plain'),
+    ('tahmaseb_ss', 'https://raw.githubusercontent.com/tahmaseb73/configs-collector-v2ray/main/data/sub/protocols/shadowsocks.txt', 'plain'),
+    ('coldwater_ss', 'https://raw.githubusercontent.com/coldwater-10/V2ray-Config-Lite/main/Splitted-By-Protocol/ss.txt', 'plain'),
+    ('nyeinkoko_all', 'https://raw.githubusercontent.com/nyeinkokoaung404/V2ray-Configs/main/All_Configs_Sub.txt', 'plain'),
+    ('nyeinkoko_vl', 'https://raw.githubusercontent.com/nyeinkokoaung404/V2ray-Configs/main/Splitted-By-Protocol/vless.txt', 'plain'),
+    ('anaer_clash', 'https://raw.githubusercontent.com/anaer/Sub/main/clash.yaml', 'plain'),
+    ('ermaozi_v2', 'https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/v2ray.txt', 'plain'),
+    ('ermaozi_clash', 'https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/clash.yml', 'plain'),
 ]
 
 # Прямые файлы по стране (если есть в этих репо) — проверяются до общего сбора.
@@ -253,7 +262,7 @@ def extract_links(text: str):
     links = []
     for m in re.finditer(r'(?:vless|vmess|hy2|hysteria2|hysteria|ss|ssr|trojan|tuic|anytls|juicity)://[^\s<>"\'\\]+', text):
         links.append(html.unescape(m.group(0)))
-    if not links and ("proxies:" in text or "proxy-groups:" in text):
+    if "proxies:" in text or "proxy-groups:" in text:
         links.extend(clash_to_links(text))
     return links
 
