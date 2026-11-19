@@ -219,85 +219,89 @@ def main():
     os.makedirs(WORKDIR, exist_ok=True)
     cpath = os.path.join(WORKDIR, "config.json")
     json.dump(cfg, open(cpath, "w"))
+    log_file = open(os.path.join(WORKDIR, "sb.log"), "w")
     proc = subprocess.Popen([SB, "run", "-c", cpath],
-                            stdout=subprocess.DEVNULL, stderr=open(os.path.join(WORKDIR, "sb.log"), "w"))
-    time.sleep(2.5)
-
-    def probe(tag):
-        info = meta[tag]
-        port = info["port"]
-        last = "000"
-        for url, want, label in list(TEST_URLS) + [TEST_URLS[0]]:   # последняя — повтор flap-ноды
-            r = subprocess.run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code} %{size_download} %{time_total}",
-                                "--max-time", str(TIMEOUT), "--socks5-hostname", f"127.0.0.1:{port}", url],
-                               capture_output=True, text=True)
-            out = r.stdout.split()
-            code = out[0] if out else "000"
-            # заглушка отвечает 200 страницей и проходит по коду, не везя трафик:
-            # тело короче 15 КБ на запросе в 16 КБ — не CDN
-            if code == "200" and "bytes=" in url and len(out) > 2 and float(out[1]) < 15000:
-                code = "short"
-            last = code
-            if code in ("204", "200"):
-                t = float(out[2]) if len(out) > 2 else 0.0
-                return {"link": info["link"], "proto": info["proto"], "alive": True,
-                        "delay": int(t * 1000), "speed_MBps": 0.0, "stage": label}
-        return {"link": info["link"], "proto": info["proto"], "alive": False, "reason": f"http-{last}"}
-
-    t0 = time.time()
-    with cf.ThreadPoolExecutor(max_workers=PAR) as ex:
-        rows = list(ex.map(probe, list(meta)))
-    # Второй проход по мёртвым с длинными таймаутами: замер на малинке (101 нода)
-    # дал 10 живых в быстром режиме против 14 с повтором — 28 % рабочих терялись
-    # на flap'ах. Дома то же самое, только дешевле по времени.
-    dead = [r for r in rows if not r["alive"]]
-    if dead and os.environ.get("NO_RECOVERY") != "1":
-        RETRY = [("http://cp.cloudflare.com/generate_204", 204, "cp-cf-r", 15),
-                 ("https://speed.cloudflare.com/__down?bytes=16384", 200, "body16k-r", 18),
-                 ("https://www.gstatic.com/generate_204", 204, "gstatic-r", 12)]
-        def redo(r):
-            tag = next(t for t, m in meta.items() if m["link"] == r["link"])
-            for url, want, label, tmo in RETRY:
-                rr = subprocess.run(["curl", "-s", "-o", "/dev/null",
-                                     "-w", "%{http_code} %{size_download} %{time_total}",
-                                     "--max-time", str(tmo), "--socks5-hostname",
-                                     f"127.0.0.1:{meta[tag]['port']}", url],
-                                    capture_output=True, text=True)
-                o = rr.stdout.split()
-                code = o[0] if o else "000"
-                size = float(o[1]) if len(o) > 2 else 0.0
-                if code == "200" and "bytes=" in url and size < 15000:
-                    continue
-                if code in ("204", "200"):
-                    return {"link": r["link"], "proto": r["proto"], "alive": True,
-                            "delay": int(float(o[2]) * 1000) if len(o) > 2 else 1,
-                            "speed_MBps": 0.0, "stage": label}
-            return r
-        with cf.ThreadPoolExecutor(max_workers=PAR) as ex:
-            rows = list(ex.map(redo, rows))
-    alive = [r for r in rows if r["alive"]]
-    # Параллельный замер реальной скорости (Speed Gate) для лучших кандидатов
-    speed_candidates = sorted(alive, key=lambda x: x["delay"])[:SPEED_TOP]
-
-    def measure_speed(r):
-        tag = next(t for t, m in meta.items() if m["link"] == r["link"])
-        rr = subprocess.run(["curl", "-s", "-o", "/dev/null", "-w", "%{speed_download}",
-                             "--max-time", "12", "--socks5-hostname", f"127.0.0.1:{meta[tag]['port']}", SPEED_URL],
-                            capture_output=True, text=True)
-        try:
-            r["speed_MBps"] = round(float(rr.stdout.strip() or 0) / 1048576, 2)
-        except ValueError:
-            r["speed_MBps"] = 0.0
-        return r
-
-    if speed_candidates:
-        with cf.ThreadPoolExecutor(max_workers=min(6, len(speed_candidates))) as ex:
-            list(ex.map(measure_speed, speed_candidates))
-    proc.terminate()
+                            stdout=subprocess.DEVNULL, stderr=log_file)
     try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
+        time.sleep(2.5)
+
+        def probe(tag):
+            info = meta[tag]
+            port = info["port"]
+            last = "000"
+            for url, want, label in list(TEST_URLS) + [TEST_URLS[0]]:   # последняя — повтор flap-ноды
+                r = subprocess.run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code} %{size_download} %{time_total}",
+                                    "--max-time", str(TIMEOUT), "--socks5-hostname", f"127.0.0.1:{port}", url],
+                                   capture_output=True, text=True)
+                out = r.stdout.split()
+                code = out[0] if out else "000"
+                # заглушка отвечает 200 страницей и проходит по коду, не везя трафик:
+                # тело короче 15 КБ на запросе в 16 КБ — не CDN
+                if code == "200" and "bytes=" in url and len(out) > 2 and float(out[1]) < 15000:
+                    code = "short"
+                last = code
+                if code in ("204", "200"):
+                    t = float(out[2]) if len(out) > 2 else 0.0
+                    return {"link": info["link"], "proto": info["proto"], "alive": True,
+                            "delay": int(t * 1000), "speed_MBps": 0.0, "stage": label}
+            return {"link": info["link"], "proto": info["proto"], "alive": False, "reason": f"http-{last}"}
+
+        t0 = time.time()
+        with cf.ThreadPoolExecutor(max_workers=PAR) as ex:
+            rows = list(ex.map(probe, list(meta)))
+        # Второй проход по мёртвым с длинными таймаутами: замер на малинке (101 нода)
+        # дал 10 живых в быстром режиме против 14 с повтором — 28 % рабочих терялись
+        # на flap'ах. Дома то же самое, только дешевле по времени.
+        dead = [r for r in rows if not r["alive"]]
+        if dead and os.environ.get("NO_RECOVERY") != "1":
+            RETRY = [("http://cp.cloudflare.com/generate_204", 204, "cp-cf-r", 15),
+                     ("https://speed.cloudflare.com/__down?bytes=16384", 200, "body16k-r", 18),
+                     ("https://www.gstatic.com/generate_204", 204, "gstatic-r", 12)]
+            def redo(r):
+                tag = next(t for t, m in meta.items() if m["link"] == r["link"])
+                for url, want, label, tmo in RETRY:
+                    rr = subprocess.run(["curl", "-s", "-o", "/dev/null",
+                                         "-w", "%{http_code} %{size_download} %{time_total}",
+                                         "--max-time", str(tmo), "--socks5-hostname",
+                                         f"127.0.0.1:{meta[tag]['port']}", url],
+                                        capture_output=True, text=True)
+                    o = rr.stdout.split()
+                    code = o[0] if o else "000"
+                    size = float(o[1]) if len(o) > 2 else 0.0
+                    if code == "200" and "bytes=" in url and size < 15000:
+                        continue
+                    if code in ("204", "200"):
+                        return {"link": r["link"], "proto": r["proto"], "alive": True,
+                                "delay": int(float(o[2]) * 1000) if len(o) > 2 else 1,
+                                "speed_MBps": 0.0, "stage": label}
+                return r
+            with cf.ThreadPoolExecutor(max_workers=PAR) as ex:
+                rows = list(ex.map(redo, rows))
+        alive = [r for r in rows if r["alive"]]
+        # Параллельный замер реальной скорости (Speed Gate) для лучших кандидатов
+        speed_candidates = sorted(alive, key=lambda x: x["delay"])[:SPEED_TOP]
+
+        def measure_speed(r):
+            tag = next(t for t, m in meta.items() if m["link"] == r["link"])
+            rr = subprocess.run(["curl", "-s", "-o", "/dev/null", "-w", "%{speed_download}",
+                                 "--max-time", "12", "--socks5-hostname", f"127.0.0.1:{meta[tag]['port']}", SPEED_URL],
+                                capture_output=True, text=True)
+            try:
+                r["speed_MBps"] = round(float(rr.stdout.strip() or 0) / 1048576, 2)
+            except ValueError:
+                r["speed_MBps"] = 0.0
+            return r
+
+        if speed_candidates:
+            with cf.ThreadPoolExecutor(max_workers=min(6, len(speed_candidates))) as ex:
+                list(ex.map(measure_speed, speed_candidates))
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        log_file.close()
     for r in rows:
         print(json.dumps(r, ensure_ascii=False))
     print(f"# sing-box: {len(alive)} живых из {len(meta)}, {time.time()-t0:.1f} c", file=sys.stderr)

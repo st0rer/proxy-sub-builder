@@ -54,7 +54,8 @@ def gc_scratch(freed):
     pats = ("scan_*.yaml", "scan_*.log", "batch_*.yaml", "batch_*.log",
             "verify.yaml", "verify.log", "livechk.yaml", "livechk.log",
             "_probe.yaml", "vlog.txt", "tr_test.*", "audit*.yaml",
-            "mobile_candidates*.json", "test_out_*.json", "*.tmp")
+            "mobile_candidates*.json", "test_out_*.json", "*.tmp",
+            "fast_pass_cand.txt", "sb_check.json", "tg_fresh_*.txt")
     for pat in pats:
         for p in glob.glob(os.path.join(SCRATCH, pat)):
             if os.path.basename(p) in PROTECT:
@@ -109,7 +110,8 @@ def gc_web(freed):
 
 def gc_logs(freed):
     log_candidates = glob.glob(os.path.join(RES, "*.log"))
-    for p in log_candidates:
+    base_logs = glob.glob(os.path.join(paths.BASE, "logs", "*.log"))
+    for p in set(log_candidates + base_logs):
         try:
             if os.path.exists(p) and os.path.getsize(p) > LOG_MAX:
                 old = p + ".1"
