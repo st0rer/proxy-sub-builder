@@ -274,6 +274,81 @@ class TestPublish(unittest.TestCase):
         self.assertTrue(any("HistNode2" in l for l in out_nodes))
         self.assertFalse(any("HistBad" in l for l in out_nodes))
 
+    def test_mobile_push_candidate_expansion_and_ru_filter(self):
+        # Проверяем расширение пула кандидатов из all_links.json и исключение RU-выходов
+        import mobile_push as mp
+        tmp = tempfile.mkdtemp()
+
+        # 1. verified.json с 1 немецкой и 1 российской нодой
+        verif = [
+            {"link": "vless://11111111-1111-1111-1111-111111111111@1.2.3.4:443?security=reality&pbk=abc#DE_Node",
+             "cc": "DE", "delay": 80, "speed_MBps": 2.5},
+            {"link": "vless://22222222-2222-2222-2222-222222222222@5.6.7.8:443?security=reality&pbk=abc#RU_Node",
+             "cc": "RU", "delay": 30, "speed_MBps": 5.0},
+        ]
+        with open(os.path.join(tmp, "verified.json"), "w", encoding="utf-8") as f:
+            json.dump(verif, f)
+
+        # 2. alive.json пуст по TCP (только 1 hy2)
+        alive = {
+            "hy2://pass@9.9.9.9:8443?sni=test.com#Hy2": 150
+        }
+        with open(os.path.join(tmp, "alive.json"), "w", encoding="utf-8") as f:
+            json.dump(alive, f)
+
+        # 3. all_links.json содержит кандидатов Reality VLESS и SS
+        pool = [
+            "vless://33333333-3333-3333-3333-333333333333@10.0.0.1:443?security=reality&pbk=abc#PoolVless1",
+            "vless://44444444-4444-4444-4444-444444444444@10.0.0.2:443?security=reality&pbk=abc#PoolVless2",
+            "ss://YWVzLTEyOC1nY206cGFzczEyMw==@10.0.0.3:8388#PoolSS1",
+            "vless://22222222-2222-2222-2222-222222222222@5.6.7.8:443?security=reality&pbk=abc#RU_Node_In_Pool",
+        ]
+        with open(os.path.join(tmp, "all_links.json"), "w", encoding="utf-8") as f:
+            json.dump(pool, f)
+
+        env = {
+            "PROXY_SUB_CACHE": tmp,
+            "PI_N_VLESS": "10",
+            "PI_N_SS": "5",
+            "PI_N_HY2": "5",
+            "FAST_TCP_PRECHECK": "0",  # отключаем реальный сокет в тесте
+        }
+        with patch.dict(os.environ, env), patch("mobile_push.CACHE", tmp), patch("mobile_push.FAST_TCP_PRECHECK", False):
+            cands = mp.pick_candidates()
+
+        # Российская нода не должна попасть в кандидаты
+        self.assertFalse(any("RU_Node" in l for l in cands))
+        # Немецкая нода из verified.json должна попасть
+        self.assertTrue(any("DE_Node" in l for l in cands))
+        # Кандидаты из all_links.json должны добрать квоту VLESS и SS
+        self.assertTrue(any("PoolVless1" in l for l in cands))
+        self.assertTrue(any("PoolVless2" in l for l in cands))
+        self.assertTrue(any("PoolSS1" in l for l in cands))
+
+    def test_filter_live_tcp(self):
+        # Проверяем работу filter_live_tcp: QUIC пропускается без TCP-проверки,
+        # а TCP-ссылки фильтруются по результату соединения
+        import mobile_push as mp
+        links = [
+            "hy2://pass@1.1.1.1:8443#Hy2Node",
+            "vless://uuid@1.1.1.2:443?security=reality#LiveVless",
+            "ss://pass@1.1.1.3:8388#DeadSS",
+        ]
+
+        def mock_create_connection(addr, timeout=1.2):
+            host, port = addr
+            if host == "1.1.1.2":
+                return MagicMock()
+            raise OSError("Connection refused")
+
+        with patch("socket.create_connection", side_effect=mock_create_connection), \
+             patch("mobile_push.FAST_TCP_PRECHECK", True):
+            filtered = mp.filter_live_tcp(links)
+
+        self.assertIn("hy2://pass@1.1.1.1:8443#Hy2Node", filtered)
+        self.assertIn("vless://uuid@1.1.1.2:443?security=reality#LiveVless", filtered)
+        self.assertNotIn("ss://pass@1.1.1.3:8388#DeadSS", filtered)
+
 
 if __name__ == "__main__":
     unittest.main()

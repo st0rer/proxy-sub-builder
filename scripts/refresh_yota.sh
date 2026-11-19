@@ -42,7 +42,8 @@ if ! flock -n 9; then echo "=== $(date -Is) пропуск: идёт друго�
     python3 "$B/yota_fallback.py" || { echo "fallback: нечего собрать"; exit 1; }
     SUB_FROM=$VPN_OUT/mobile_fallback.json \
     SUB_OUT="$OUT" \
-    SUB_CAPS="vless=40,hy2=15,ss=10,trojan=0,vmess=0" \
+    SUB_CAPS="vless=60,ss=30,hy2=10,anytls=15,trojan=10,tuic=0,vmess=0" \
+    SUB_MAX_PER_PANEL=6 \
     SUB_ORDER=tcp \
     SUB_MIN_SPEED=0.03 \
     SUB_MIN_NODES=${SUB_MIN_NODES:-3} \
@@ -62,7 +63,8 @@ if ! flock -n 9; then echo "=== $(date -Is) пропуск: идёт друго�
 
   SUB_FROM=$VPN_OUT/mobile_results.json \
   SUB_OUT="$OUT" \
-  SUB_CAPS="vless=40,hy2=15,ss=10,trojan=0,vmess=0" \
+  SUB_CAPS="vless=60,ss=30,hy2=10,anytls=15,trojan=10,tuic=0,vmess=0" \
+  SUB_MAX_PER_PANEL=6 \
   SUB_ORDER=tcp \
   SUB_MIN_SPEED=0.03 \
   SUB_MIN_NODES=${SUB_MIN_NODES:-3} \

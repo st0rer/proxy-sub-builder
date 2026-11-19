@@ -304,13 +304,10 @@ def main():
                     print(f"  {r['delay']:>5} мс  udp={'да ' if r['udp'] else 'нет'}  [{r['stage']}]  {r['link'][:42]}",
                           flush=True)
 
-        # Второй проход по «мёртвым» с длинными таймаутами. Замер 16.11.2026 на
-        # 101 ноде: 10 живых в быстром режиме, 14 при повторной проверке — 4 рабочие
-        # ноды (28 % от живых) терялись на flap'ах и таймаутах 7/10 с. Один повтор
-        # с 15/18 с возвращает их, стоит ~40 с на мёртвую ноду и не тратит трафик.
-        RECOVERY = (("http://cp.cloudflare.com/generate_204", 15, "cp-cf-r"),
-                    ("https://speed.cloudflare.com/__down?bytes=16384", 18, "body16k-r"),
-                    ("https://www.gstatic.com/generate_204", 10, "gstatic-r"))
+        # Второй проход по «мёртвым» с длинными таймаутами. 2 ступени (10s + 8s)
+        # возвращают флапающие ноды, не задерживая прогон на 40+ с на каждый мертвый узел.
+        RECOVERY = (("http://cp.cloudflare.com/generate_204", 10, "cp-cf-r"),
+                    ("https://www.gstatic.com/generate_204", 8, "gstatic-r"))
         dead = [r for r in rows if not r["delay"]]
         if dead and os.environ.get("NO_RECOVERY") != "1":
             print(f"  второй проход по {len(dead)} мёртвым (длинные таймауты)…", flush=True)
