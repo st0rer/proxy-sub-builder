@@ -261,8 +261,8 @@ def main():
                         for l, info in sorted(mhist.items(), key=repl_key):
                             if l in curr_links:
                                 continue
-                            if info.get("consecutive_fails", 0) > 0:
-                                continue  # Не добирать ноды, упавшие в недавних проверках
+                            if info.get("consecutive_fails", 0) >= 2:
+                                continue  # Защита от голодания: отсекаем стойко мёртвые (2+ сбоя подряд), но разрешаем разовый флап со сниженным score
                             if info.get("gemini") == "ok" and (now_ts - info.get("ts", 0) < 86400):
                                 rows.append({
                                     "link": l,
