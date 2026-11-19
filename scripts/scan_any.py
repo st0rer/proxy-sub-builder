@@ -22,6 +22,8 @@ import paths  # noqa: E402  (локальные пути проекта)
 
 HOME = os.path.expanduser("~")
 BIN = paths.binary("mihomo")
+SB_BIN = paths.binary("sing-box")
+SCAN_ENGINE = os.environ.get("SCAN_ENGINE", "singbox").lower()
 SCRATCH = paths.SCRATCH
 CACHE = paths.CACHE
 RAW = os.path.join(CACHE, "raw")
@@ -502,16 +504,17 @@ def filter_valid(proxies, depth=0):
 
 
 def kill_stale_mihomo():
-    """Добить осиротевшие mihomo этого движка: после падения прогона они держат
+    """Добить осиротевшие mihomo или sing-box этого движка: после падения прогона они держат
     порты 7891/9098 и память, а новый запуск молча получает чужие результаты."""
     killed = 0
     if not os.path.exists("/proc"):
         if os.name == "nt":
-            try:
-                subprocess.run(["taskkill", "/f", "/im", "mihomo.exe"],
-                               capture_output=True, check=False)
-            except Exception:
-                pass
+            for im in ("mihomo.exe", "sing-box.exe"):
+                try:
+                    subprocess.run(["taskkill", "/f", "/im", im],
+                                   capture_output=True, check=False)
+                except Exception:
+                    pass
         return 0
     for pid in os.listdir("/proc"):
         if not pid.isdigit():
@@ -520,7 +523,7 @@ def kill_stale_mihomo():
             cmd = open(f"/proc/{pid}/cmdline", "rb").read().decode("utf-8", "ignore")
         except Exception:
             continue
-        if "mihomo" in cmd and SCRATCH in cmd:
+        if any(eng in cmd for eng in ("mihomo", "sing-box")) and SCRATCH in cmd:
             try:
                 os.kill(int(pid), 9)
                 killed += 1
@@ -584,6 +587,94 @@ def run_chunk(links, idx, mixed=7891, api_port=9098):
     return res
 
 
+def run_chunk_sb(links, idx, mixed=7891, api_port=9098):
+    """url-test через sing-box с experimental.clash_api (нативный, быстрый, без segfault на ARM)."""
+    import sb_verify as sbv
+    outbounds, mapping, seen = [], {}, set()
+    for i, l in enumerate(links):
+        name = f"p{idx}_{i}"
+        p = ffv.link_to_proxy(l, name)
+        p = sanitize_proxy(p) if p else None
+        if not p:
+            continue
+        key = (p["type"], p["server"], p["port"], p.get("uuid") or p.get("password"))
+        if key in seen:
+            continue
+        seen.add(key)
+        ob = sbv.to_singbox(p, name)
+        if not ob:
+            continue
+        flow = str(ob.get("flow") or "")
+        if flow and flow != "xtls-rprx-vision":
+            continue
+        outbounds.append(ob)
+        mapping[name] = l
+    if not outbounds:
+        return {}
+
+    outbounds.append({"type": "direct", "tag": "direct"})
+    cfg = {
+        "log": {"level": "warn"},
+        "experimental": {
+            "clash_api": {
+                "external_controller": f"127.0.0.1:{api_port}"
+            }
+        },
+        "inbounds": [
+            {"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": mixed}
+        ],
+        "outbounds": outbounds
+    }
+    cfg_f = os.path.join(SCRATCH, f"scan_sb_{idx}.json")
+    with open(cfg_f, "w", encoding="utf-8") as f:
+        json.dump(cfg, f)
+
+    SB = paths.binary("sing-box")
+    r_chk = subprocess.run([SB, "check", "-c", cfg_f], capture_output=True, text=True)
+    if r_chk.returncode != 0:
+        err_msg = r_chk.stderr or ""
+        bad_idx_match = re.search(r"outbound\[(\d+)\]", err_msg)
+        if bad_idx_match:
+            bad_idx = int(bad_idx_match.group(1))
+            if bad_idx < len(outbounds) - 1:
+                bad_tag = outbounds[bad_idx]["tag"]
+                mapping.pop(bad_tag, None)
+                outbounds.pop(bad_idx)
+                with open(cfg_f, "w", encoding="utf-8") as f:
+                    json.dump(cfg, f)
+
+    log = open(os.path.join(SCRATCH, f"scan_sb_{idx}.log"), "w")
+    proc = subprocess.Popen([SB, "run", "-c", cfg_f], stdout=log, stderr=log)
+    time.sleep(1.2)
+    if proc.poll() is not None:
+        log.close()
+        print("  !! sing-box died: " + open(os.path.join(SCRATCH, f"scan_sb_{idx}.log")).read()[:160])
+        return {}
+
+    res = {}
+    import concurrent.futures as cf
+    with cf.ThreadPoolExecutor(max_workers=50) as ex:
+        futs = {ex.submit(probe_delay, api_port, n): n for n in mapping}
+        try:
+            for fu in cf.as_completed(futs, timeout=240):
+                n = futs[fu]
+                try:
+                    d = fu.result()
+                except Exception:
+                    d = 0
+                if d:
+                    res[mapping[n]] = d
+        except Exception as e:
+            print(f"  !! чанк {idx} не уложился в таймаут ({type(e).__name__}), беру {len(res)} результатов", flush=True)
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        proc.kill()
+    log.close()
+    return res
+
+
 def latency(n_vless=1400):
     links = [re.split(r"#", l)[0] for l in json.load(open(LINKS_F))]
     # SCAN_ONLY=hy2 — весь бюджет теста уходит на один протокол.
@@ -626,13 +717,15 @@ def latency(n_vless=1400):
           f"прочее={len(bo)} trojan/vmess/ss={len(tjs)} -> тестирую {len(cand)}")
     k = kill_stale_mihomo()
     if k:
-        print(f"  (убито осиротевших mihomo: {k})")
+        print(f"  (убито осиротевших движков: {k})")
+    runner = run_chunk_sb if (SCAN_ENGINE == "singbox" and os.path.exists(SB_BIN)) else run_chunk
+    print(f"движок сканирования задержки: {'sing-box' if runner == run_chunk_sb else 'mihomo'}")
     alive = {}
     CH = CHUNK
     for i in range(0, len(cand), CH):
         t0 = time.time()
         try:
-            r = run_chunk(cand[i:i + CH], i // CH)
+            r = runner(cand[i:i + CH], i // CH)
         except Exception as e:
             print(f"  !! чанк {i // CH} упал ({type(e).__name__}: {str(e)[:60]}) — иду дальше", flush=True)
             r = {}

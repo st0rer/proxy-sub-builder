@@ -473,49 +473,35 @@ def main():
     print(f"кандидатов на мобильную проверку: {len(nodes)}")
 
     sb_cfg, sb_used, sb_nodes = build_sb_config(pairs)
+    if not sb_used:
+        print("ни одна нода не собралась в конфиг sing-box")
+        return 1
+    print(f"кандидатов на мобильную проверку (sing-box): {sb_used}")
+
     tmp = tempfile.mkdtemp()
-    cfg_f = os.path.join(tmp, "config.yaml")
-    nodes_f = os.path.join(tmp, "nodes.json")
     sb_f = os.path.join(tmp, "sb.json")
     sb_nodes_f = os.path.join(tmp, "sb_nodes.json")
-    open(cfg_f, "w").write(cfg)
-    json.dump(nodes, open(nodes_f, "w"), ensure_ascii=False)
     json.dump(sb_cfg, open(sb_f, "w"), ensure_ascii=False)
     json.dump(sb_nodes, open(sb_nodes_f, "w"), ensure_ascii=False)
 
-    r = ssh(f"mkdir -p {WORK} /opt/vpntest && rm -f {WORK}/out.json && cat > {WORK}/config.yaml",
-            input_bytes=cfg.encode())
+    r = ssh(f"mkdir -p {WORK} /opt/vpntest && rm -f {WORK}/out.json && cat > {WORK}/sb.json",
+            input_bytes=json.dumps(sb_cfg).encode())
     if r.returncode:
-        print("не залил конфиг:", r.stderr.decode()[:200])
+        print("не залил конфиг sing-box:", r.stderr.decode()[:200])
         return 2
-    r = ssh(f"cat > {WORK}/nodes.json", input_bytes=json.dumps(nodes).encode())
+    r = ssh(f"cat > {WORK}/sb_nodes.json", input_bytes=json.dumps(sb_nodes).encode())
     if r.returncode:
-        print("не залил список:", r.stderr.decode()[:200])
+        print("не залил список нод:", r.stderr.decode()[:200])
         return 2
-    r = ssh("cat > /opt/vpntest/pi_verify.py", input_bytes=open(os.path.join(paths.SCRIPT_DIR, "pi_verify.py"), "rb").read())
+    r = ssh("cat > /opt/vpntest/pi_sb_verify.py",
+            input_bytes=open(os.path.join(paths.SCRIPT_DIR, "pi_sb_verify.py"), "rb").read())
     if r.returncode:
-        print("не залил скрипт:", r.stderr.decode()[:200])
+        print("не залил скрипт проверки:", r.stderr.decode()[:200])
         return 2
 
-    # sing-box первым: он умеет anytls/tuic, которых mihomo 1.18.10 не знает
-    engine = os.environ.get("PI_ENGINE", "sb")
-    if engine == "sb" and sb_used:
-        r = ssh(f"cat > {WORK}/sb.json", input_bytes=json.dumps(sb_cfg).encode())
-        if r.returncode == 0:
-            r = ssh(f"cat > {WORK}/sb_nodes.json", input_bytes=json.dumps(sb_nodes).encode())
-            r = ssh("cat > /opt/vpntest/pi_sb_verify.py",
-                    input_bytes=open(os.path.join(paths.SCRIPT_DIR, "pi_sb_verify.py"), "rb").read())
-        print(f"проверяю через Yota (малинка, sing-box, нод {sb_used})…")
-        r = ssh(f"python3 /opt/vpntest/pi_sb_verify.py {WORK}/sb.json {WORK}/sb_nodes.json "
-                f"{WORK}/out.json", timeout=int(os.environ.get("PI_TIMEOUT", "2400")))
-        if r.returncode:
-            print("sing-box не справился, откат на mihomo:",
-                  r.stderr.decode(errors="ignore")[-300:])
-            engine = "mihomo"
-    if engine != "sb" or not sb_used:
-        print("проверяю через Yota (малинка, mihomo)…")
-        r = ssh(f"python3 /opt/vpntest/pi_verify.py {WORK}/config.yaml {WORK}/nodes.json "
-                f"{WORK}/out.json", timeout=int(os.environ.get("PI_TIMEOUT", "2400")))
+    print(f"проверяю через Yota (малинка, sing-box, нод {sb_used})…")
+    r = ssh(f"python3 /opt/vpntest/pi_sb_verify.py {WORK}/sb.json {WORK}/sb_nodes.json "
+            f"{WORK}/out.json", timeout=int(os.environ.get("PI_TIMEOUT", "2400")))
     print((r.stdout.decode(errors="ignore") or "")[-1500:])
     if r.returncode:
         print("ошибка на малинке:", r.stderr.decode(errors="ignore")[-400:])
