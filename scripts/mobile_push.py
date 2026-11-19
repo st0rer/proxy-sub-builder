@@ -41,6 +41,7 @@ N_VLESS = int(os.environ.get("PI_N_VLESS", "120"))
 N_SS = int(os.environ.get("PI_N_SS", "60"))
 N_ANYTLS = int(os.environ.get("PI_N_ANYTLS", "15"))
 N_TUIC = int(os.environ.get("PI_N_TUIC", "2"))
+N_TROJAN = int(os.environ.get("PI_N_TROJAN", "60"))
 N_POOL = int(os.environ.get("PI_N_POOL", "120"))  # добор из пула
 N_SIB = int(os.environ.get("PI_N_SIB", "60"))     # адреса рабочих панелей (выход 45% против 8%)
 PER_ADDR = 2
@@ -145,7 +146,7 @@ def pick_candidates():
         alive = {}
     is_h2 = lambda l: l.startswith(("hy2://", "hysteria2://", "hysteria://"))
     fam = lambda l: "hy2" if is_h2(l) else l.split("://")[0]
-    groups = {"hy2": [], "vless": [], "ss": [], "anytls": [], "tuic": []}
+    groups = {"hy2": [], "vless": [], "ss": [], "anytls": [], "tuic": [], "trojan": []}
 
     # Добавляем сначала verified_non_ru (с подтвержденной низкой задержкой и чистым гео)
     for v in verified_non_ru:
@@ -200,7 +201,7 @@ def pick_candidates():
 
     picked, per_addr = [], {}
     for f, budget in (("hy2", N_HY2), ("vless", N_VLESS), ("ss", N_SS),
-                      ("anytls", N_ANYTLS), ("tuic", N_TUIC)):
+                      ("anytls", N_ANYTLS), ("tuic", N_TUIC), ("trojan", N_TROJAN)):
         taken = 0
         for link, delay in groups[f]:
             a = sa._host_of(link)
@@ -291,6 +292,31 @@ def pick_candidates():
             picked_set.add(l)
             ss_count += 1
             if ss_count >= N_SS:
+                break
+
+    # 2b) Добор Trojan: в пуле 1700+ свежих троянов, а мобильный пайплайн их
+    # вообще не брал (группы не было). Протокол TCP-ный, пречек работает.
+    tr_count = sum(1 for l in picked if l.startswith("trojan://"))
+    if tr_count < N_TROJAN and pool:
+        needed = N_TROJAN - tr_count
+        cands = []
+        for l in pool:
+            if not l.startswith("trojan://") or l in picked_set or l in known_ru or l in mtested:
+                continue
+            a = sa._host_of(l)
+            if not a or a[0] in known_blocked_ips or per_addr.get(a, 0) >= PER_ADDR:
+                continue
+            cands.append(l)
+        live_tcp = filter_live_tcp(cands[:needed * 3])
+        for l in live_tcp:
+            a = sa._host_of(l)
+            if not a or per_addr.get(a, 0) >= PER_ADDR:
+                continue
+            per_addr[a] = per_addr.get(a, 0) + 1
+            picked.append(l)
+            picked_set.add(l)
+            tr_count += 1
+            if tr_count >= N_TROJAN:
                 break
 
     # 3) anytls / tuic из пула
