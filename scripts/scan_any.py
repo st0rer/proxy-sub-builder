@@ -340,16 +340,19 @@ def extract_raw_links(raw_bytes):
     links = set()
     text = raw_bytes.decode("utf-8", "replace")
 
+    def clean(l):
+        return html.unescape(l).rstrip(".,:;()[]{}&?'\"`")
+
     # 1. Прямой поиск
     for l in LINK_RE.findall(text):
-        links.add(html.unescape(l))
+        links.add(clean(l))
 
     # 2. Поиск URL-закодированных ссылок
     if "%3A%2F%2F" in text or "%3a%2f%2f" in text:
         try:
             unquoted = urllib.parse.unquote(text)
             for l in LINK_RE.findall(unquoted):
-                links.add(html.unescape(l))
+                links.add(clean(l))
         except Exception:
             pass
 
@@ -360,10 +363,10 @@ def extract_raw_links(raw_bytes):
         try:
             dec = base64.b64decode(stripped + pad).decode("utf-8", "replace")
             for l in LINK_RE.findall(dec):
-                links.add(html.unescape(l))
+                links.add(clean(l))
             if "proxies:" in dec or "proxy-groups:" in dec:
                 for l in ffv.clash_to_links(dec):
-                    links.add(html.unescape(l))
+                    links.add(clean(l))
         except Exception:
             pass
 
@@ -373,17 +376,17 @@ def extract_raw_links(raw_bytes):
         try:
             dec = base64.b64decode(block + pad).decode("utf-8", "replace")
             for l in LINK_RE.findall(dec):
-                links.add(html.unescape(l))
+                links.add(clean(l))
             if "proxies:" in dec or "proxy-groups:" in dec:
                 for l in ffv.clash_to_links(dec):
-                    links.add(html.unescape(l))
+                    links.add(clean(l))
         except Exception:
             pass
 
     # 5. Clash YAML в исходном тексте
     if "proxies:" in text or "proxy-groups:" in text:
         for l in ffv.clash_to_links(text):
-            links.add(html.unescape(l))
+            links.add(clean(l))
 
     return links
 
@@ -501,6 +504,12 @@ def dedupe_connections(links):
     hosts = {(_host_of(l) or (None,))[0] for l in links}
     hosts.discard(None)
     hostmap = {}
+    to_resolve = set()
+    for h in hosts:
+        if re.match(r"^\d+\.\d+\.\d+\.\d+$", h) or ":" in h:
+            hostmap[h] = h
+        else:
+            to_resolve.add(h)
 
     def resolve(h):
         try:
@@ -508,9 +517,10 @@ def dedupe_connections(links):
         except Exception:
             return h, h
 
-    with cf.ThreadPoolExecutor(max_workers=32) as ex:
-        for h, ip in ex.map(resolve, hosts):
-            hostmap[h] = ip
+    if to_resolve:
+        with cf.ThreadPoolExecutor(max_workers=32) as ex:
+            for h, ip in ex.map(resolve, to_resolve):
+                hostmap[h] = ip
 
     seen, out = set(), []
     for l in links:

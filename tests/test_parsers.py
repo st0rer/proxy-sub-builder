@@ -100,6 +100,18 @@ proxies:
         links = ffv.extract_links(garbage)
         self.assertIsInstance(links, list)
 
+    def test_trojan_with_slash_and_uuid_password(self):
+        # Проверка: Trojan с UUID-паролем не должен превращаться в VLESS через normalize_link
+        link = "trojan://11111111-2222-3333-4444-555555555555@trojan-server.com:443/?sni=trojan-server.com#MyTrojan"
+        norm = ffv.normalize_link(link)
+        self.assertTrue(norm.startswith("trojan://"), f"Trojan link was wrongly converted: {norm}")
+        p = ffv.parse_trojan(norm)
+        self.assertIsNotNone(p)
+        self.assertEqual(p["host"], "trojan-server.com")
+        self.assertEqual(p["port"], 443)
+        self.assertEqual(p["password"], "11111111-2222-3333-4444-555555555555")
+        self.assertEqual(p["sni"], "trojan-server.com")
+
 
 if __name__ == "__main__":
     unittest.main()

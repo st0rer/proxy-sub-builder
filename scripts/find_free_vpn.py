@@ -178,15 +178,23 @@ UUID_RE = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]
 
 def normalize_link(l):
     """Чинит перепутанные схемы: в бесплатных списках vless-ссылки массово
-    лежат под vmess://, ss:// и trojan://. Признак — uuid@host:port?с-параметрами."""
+    лежат под vmess:// и ss:// (и ошибочно под trojan://, если есть VLESS-маркеры).
+    ВАЖНО: trojan:// с паролем в виде UUID НЕ должен превращаться в vless, если
+    в параметрах нет явных маркеров VLESS (reality, pbk, flow, security)."""
     for bad in ("vmess://", "ss://", "trojan://"):
         if l.startswith(bad):
             body = l[len(bad):]
             head = body.split("#", 1)[0]
             userinfo = head.split("@", 1)[0]
             looks_vless = bool(UUID_RE.match(urllib.parse.unquote(userinfo)))
-            if "@" in head and "?" in head and (looks_vless or any(k in head for k in VLESS_MARKERS)):
-                return "vless://" + body
+            has_marker = any(k in head for k in VLESS_MARKERS)
+            # Для trojan:// требуем строго наличие маркера VLESS, так как пароли в Trojan часто являются UUID
+            if bad == "trojan://":
+                if "@" in head and has_marker:
+                    return "vless://" + body
+            else:
+                if "@" in head and "?" in head and (looks_vless or has_marker):
+                    return "vless://" + body
     return l
 
 
@@ -232,19 +240,30 @@ def clash_to_links(text: str):
                 sni = p.get("servername") or p.get("sni")
                 if sni:
                     q.append(f"sni={sni}")
+                if p.get("client-fingerprint"):
+                    q.append(f"fp={p['client-fingerprint']}")
                 net = p.get("network") or "tcp"
                 q.append(f"type={net}")
                 ws_opts = p.get("ws-opts") or {}
                 if net == "ws" and ws_opts.get("path"):
                     q.append(f"path={ws_opts['path']}")
+                grpc_opts = p.get("grpc-opts") or {}
+                if net == "grpc" and grpc_opts.get("grpc-service-name"):
+                    q.append(f"serviceName={grpc_opts['grpc-service-name']}")
                 if p.get("flow") and p["flow"] == "xtls-rprx-vision":
                     q.append("flow=xtls-rprx-vision")
                 query = ("?" + "&".join(q)) if q else ""
                 links.append(f"vless://{p['uuid']}@{server}:{port}{query}#{name}")
             elif t in ("hy2", "hysteria2") and p.get("password"):
                 sni = p.get("sni") or p.get("servername", "")
-                q = f"?sni={sni}" if sni else ""
-                links.append(f"hysteria2://{p['password']}@{server}:{port}/{q}#{name}")
+                q = []
+                if sni: q.append(f"sni={sni}")
+                if p.get("skip-cert-verify"): q.append("insecure=1")
+                if p.get("obfs"):
+                    q.append(f"obfs={p['obfs']}")
+                    if p.get("obfs-password"): q.append(f"obfs-password={p['obfs-password']}")
+                qs = ("?" + "&".join(q)) if q else ""
+                links.append(f"hysteria2://{p['password']}@{server}:{port}{qs}#{name}")
             elif t in ("ss", "shadowsocks") and p.get("password") and p.get("cipher"):
                 userinfo = base64.b64encode(f"{p['cipher']}:{p['password']}".encode()).decode()
                 links.append(f"ss://{userinfo}@{server}:{port}#{name}")
@@ -252,8 +271,28 @@ def clash_to_links(text: str):
                 sni = p.get("sni") or p.get("servername", "")
                 q = f"?sni={sni}" if sni else ""
                 links.append(f"trojan://{p['password']}@{server}:{port}{q}#{name}")
-            elif t == "tuic" and p.get("uuid") and p.get("password"):
-                links.append(f"tuic://{p['uuid']}:{p['password']}@{server}:{port}#{name}")
+            elif t == "tuic" and p.get("uuid"):
+                pwd = p.get("password") or ""
+                sni = p.get("sni") or p.get("servername", "")
+                q = f"?sni={sni}" if sni else ""
+                links.append(f"tuic://{p['uuid']}:{pwd}@{server}:{port}{q}#{name}")
+            elif t == "anytls" and p.get("password"):
+                sni = p.get("sni") or p.get("servername", "")
+                q = f"?sni={sni}" if sni else ""
+                links.append(f"anytls://{p['password']}@{server}:{port}{q}#{name}")
+            elif t == "vmess" and p.get("uuid"):
+                v_dict = {
+                    "v": "2", "ps": name, "add": server, "port": port,
+                    "id": p["uuid"], "aid": p.get("alterId", 0), "scy": p.get("cipher", "auto"),
+                    "net": p.get("network", "tcp"), "type": "none", "tls": "tls" if p.get("tls") else ""
+                }
+                if p.get("servername") or p.get("sni"):
+                    v_dict["sni"] = p.get("servername") or p.get("sni")
+                ws_opts = p.get("ws-opts") or {}
+                if p.get("network") == "ws" and ws_opts.get("path"):
+                    v_dict["path"] = ws_opts["path"]
+                b64_v = base64.b64encode(json.dumps(v_dict).encode()).decode()
+                links.append(f"vmess://{b64_v}")
     return links
 
 
@@ -316,8 +355,8 @@ def parse_hy2(url):
     }
 
 def _split_hostport(hp):
-    """host:port с поддержкой [IPv6]:port."""
-    m = re.match(r'^(\[[0-9a-fA-F:]+\]|[^:]+):(\d+)$', hp.strip())
+    """host:port с поддержкой [IPv6]:port и хвостовых слэшей."""
+    m = re.match(r'^(\[[0-9a-fA-F:]+\]|[^:]+):(\d+)$', hp.strip().rstrip('/'))
     if not m:
         return None, None
     host = m.group(1)
