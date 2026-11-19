@@ -336,7 +336,13 @@ def main():
         if cnt.get(f, 0) >= CAPS.get(f, 30):
             continue
         pr = ffv.link_to_proxy(l, "x") or {}
-        pk = (f, str(pr.get("uuid") or pr.get("password") or pr.get("auth") or ""))
+        pwd = str(pr.get("uuid") or pr.get("password") or pr.get("auth") or "")
+        # Для Shadowsocks короткие/шаблонные пароли (password, 123456 и т.п.)
+        # не должны склеивать независимые серверы в одну «панель»
+        if f == "ss" and len(pwd) <= 8:
+            pk = (f, f"{pr.get('server')}:{pwd}")
+        else:
+            pk = (f, pwd)
         if pk[1] and panel_seen.get(pk, 0) >= MAX_PER_PANEL:
             continue
         panel_seen[pk] = panel_seen.get(pk, 0) + 1

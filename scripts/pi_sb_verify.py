@@ -81,6 +81,7 @@ def mem_avail_mb():
 
 def kill_stale():
     killed = 0
+    pids = []
     for pid in os.listdir("/proc"):
         if not pid.isdigit() or int(pid) == os.getpid():
             continue
@@ -88,14 +89,21 @@ def kill_stale():
             args = open(f"/proc/{pid}/cmdline", "rb").read().split(b"\0")
         except Exception:
             continue
-        if args and args[0].endswith(b"sing-box"):
+        if args and any(p in args[0] for p in (b"sing-box", b"mihomo")):
             try:
                 os.kill(int(pid), 15)
+                pids.append(int(pid))
                 killed += 1
             except Exception:
                 pass
-    if killed:
-        time.sleep(1.5)
+    if pids:
+        time.sleep(1.2)
+        # Добиваем зависшие процессы через SIGKILL, освобождая порты 21000+
+        for pid in pids:
+            try:
+                os.kill(pid, 9)
+            except Exception:
+                pass
     return killed
 
 
@@ -236,13 +244,17 @@ def main():
         def tcp_ok(n):
             if n["link"].split("://")[0] in QUIC_PROTOS:
                 return True          # у QUIC TCP-порт закрыт штатно
-            host = n["link"].split("://", 1)[1].split("#")[0]
-            if "@" in host:
-                host = host.split("@", 1)[1]
-            host = host.split("?")[0].split("/")[0]
-            h, _, p = host.rpartition(":")
-            if not h:
-                h, p = host, "443"
+            dst = n.get("dst")
+            if dst:
+                h, p = dst[0], dst[1]
+            else:
+                host = n["link"].split("://", 1)[1].split("#")[0]
+                if "@" in host:
+                    host = host.split("@", 1)[1]
+                host = host.split("?")[0].split("/")[0]
+                h, _, p = host.rpartition(":")
+                if not h:
+                    h, p = host, "443"
             try:
                 port_num = int(p)
             except Exception:

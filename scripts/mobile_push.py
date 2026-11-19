@@ -438,6 +438,7 @@ SB_SKIP_NETS = {"xhttp", "kcp", "mkcp"}
 
 def build_sb_config(pairs):
     inbounds, outbounds, rules, used = [], [], [], 0
+    sb_nodes = []
     for p, n in pairs:
         if p.get("type") in SB_SKIP_TYPES or p.get("network") in SB_SKIP_NETS:
             continue
@@ -453,10 +454,11 @@ def build_sb_config(pairs):
         outbounds.append(ob)
         rules.append({"inbound": ["in" + n["name"]], "outbound": n["name"]})
         used += 1
+        sb_nodes.append(n)
     outbounds.append({"type": "direct", "tag": "direct"})
     cfg = {"log": {"level": "warn"}, "inbounds": inbounds, "outbounds": outbounds,
            "route": {"rules": rules, "final": "direct"}}
-    return cfg, used
+    return cfg, used, sb_nodes
 
 
 def main():
@@ -470,14 +472,16 @@ def main():
         return 1
     print(f"кандидатов на мобильную проверку: {len(nodes)}")
 
-    sb_cfg, sb_used = build_sb_config(pairs)
+    sb_cfg, sb_used, sb_nodes = build_sb_config(pairs)
     tmp = tempfile.mkdtemp()
     cfg_f = os.path.join(tmp, "config.yaml")
     nodes_f = os.path.join(tmp, "nodes.json")
     sb_f = os.path.join(tmp, "sb.json")
+    sb_nodes_f = os.path.join(tmp, "sb_nodes.json")
     open(cfg_f, "w").write(cfg)
     json.dump(nodes, open(nodes_f, "w"), ensure_ascii=False)
     json.dump(sb_cfg, open(sb_f, "w"), ensure_ascii=False)
+    json.dump(sb_nodes, open(sb_nodes_f, "w"), ensure_ascii=False)
 
     r = ssh(f"mkdir -p {WORK} /opt/vpntest && rm -f {WORK}/out.json && cat > {WORK}/config.yaml",
             input_bytes=cfg.encode())
@@ -498,10 +502,11 @@ def main():
     if engine == "sb" and sb_used:
         r = ssh(f"cat > {WORK}/sb.json", input_bytes=json.dumps(sb_cfg).encode())
         if r.returncode == 0:
+            r = ssh(f"cat > {WORK}/sb_nodes.json", input_bytes=json.dumps(sb_nodes).encode())
             r = ssh("cat > /opt/vpntest/pi_sb_verify.py",
                     input_bytes=open(os.path.join(paths.SCRIPT_DIR, "pi_sb_verify.py"), "rb").read())
         print(f"проверяю через Yota (малинка, sing-box, нод {sb_used})…")
-        r = ssh(f"python3 /opt/vpntest/pi_sb_verify.py {WORK}/sb.json {WORK}/nodes.json "
+        r = ssh(f"python3 /opt/vpntest/pi_sb_verify.py {WORK}/sb.json {WORK}/sb_nodes.json "
                 f"{WORK}/out.json", timeout=int(os.environ.get("PI_TIMEOUT", "2400")))
         if r.returncode:
             print("sing-box не справился, откат на mihomo:",

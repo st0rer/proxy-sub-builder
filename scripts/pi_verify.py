@@ -184,6 +184,7 @@ def kill_stale_mihomo(workdir):
     не те ноды, которые просили.
     """
     killed = 0
+    pids = []
     for pid in os.listdir("/proc"):
         if not pid.isdigit() or int(pid) == os.getpid():
             continue
@@ -191,16 +192,20 @@ def kill_stale_mihomo(workdir):
             args = open(f"/proc/{pid}/cmdline", "rb").read().split(b"\0")
         except Exception:
             continue
-        if not args or b"mihomo" not in args[0]:
-            continue
-        if workdir.encode() in b" ".join(args):
+        if args and any(p in args[0] for p in (b"mihomo", b"sing-box")):
             try:
                 os.kill(int(pid), 15)
+                pids.append(int(pid))
                 killed += 1
             except Exception:
                 pass
-    if killed:
-        time.sleep(1.5)
+    if pids:
+        time.sleep(1.2)
+        for pid in pids:
+            try:
+                os.kill(pid, 9)
+            except Exception:
+                pass
     return killed
 
 

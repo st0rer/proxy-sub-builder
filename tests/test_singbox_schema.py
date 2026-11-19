@@ -55,10 +55,12 @@ class TestSingboxSchema(unittest.TestCase):
         good_link = "vless://22222222-3333-4433-5555-666666666666@1.2.3.5:443?security=reality&pbk=abcdefghijklmnopqrstuvwxyz0123456789ABCDEF=&sni=dl.google.com&flow=xtls-rprx-vision#GoodFlow"
 
         _yaml, _nodes, pairs = mp.build_config([bad_link, good_link])
-        sb_cfg, used = mp.build_sb_config(pairs)
+        sb_cfg, used, sb_nodes = mp.build_sb_config(pairs)
 
-        # Битый flow должен быть отсеян
+        # Битый flow должен быть отсеян и из конфига, и из sb_nodes
         self.assertEqual(used, 1)
+        self.assertEqual(len(sb_nodes), 1)
+        self.assertEqual(sb_nodes[0]["link"], good_link)
 
 
 if __name__ == "__main__":
