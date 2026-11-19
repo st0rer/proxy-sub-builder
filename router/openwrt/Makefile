@@ -16,7 +16,7 @@ define Package/singbox-sub-client
   SUBMENU:=Routing
   TITLE:=Autonomous sing-box subscription client with PBR and Gemini/Geo verification
   URL:=https://github.com/st0rer/proxy-sub-builder
-  DEPENDS:=+sing-box +curl +jq +ca-bundle +kmod-tun +python3-light
+  DEPENDS:=+sing-box +curl +jq +ca-bundle +kmod-tun +python3-light +python3-urllib
   PKGARCH:=all
 endef
 

@@ -14,12 +14,28 @@ fi
 
 echo "=== 2. Установка зависимостей через opkg ==="
 /opt/bin/opkg update
-for pkg in sing-box curl jq ca-certificates python3-light iptables; do
+# Базовые утилиты
+for pkg in curl jq ca-certificates iptables; do
 	if ! /opt/bin/opkg list-installed | grep -q "^${pkg} "; then
 		echo "Устанавливаю $pkg..."
 		/opt/bin/opkg install "$pkg" || echo "Предупреждение: не удалось установить $pkg"
 	fi
 done
+
+# sing-box: в Entware пакет называется sing-box-go (или sing-box)
+if ! /opt/bin/opkg list-installed | grep -E -q '^(sing-box|sing-box-go) '; then
+	echo "Устанавливаю sing-box..."
+	/opt/bin/opkg install sing-box-go || /opt/bin/opkg install sing-box || echo "Предупреждение: не удалось установить sing-box"
+fi
+if [ -x /opt/bin/sing-box-go ] && [ ! -e /opt/bin/sing-box ]; then
+	ln -sf /opt/bin/sing-box-go /opt/bin/sing-box
+fi
+
+# python3: в Entware пакет называется python3 (или python3-base)
+if ! /opt/bin/opkg list-installed | grep -E -q '^(python3|python3-light|python3-base) '; then
+	echo "Устанавливаю python3..."
+	/opt/bin/opkg install python3 || /opt/bin/opkg install python3-light || echo "Предупреждение: не удалось установить python3"
+fi
 
 echo "=== 3. Создание каталогов ==="
 mkdir -p /opt/bin /opt/etc/sing-box /opt/etc/singbox-client /opt/etc/init.d \

@@ -6,7 +6,7 @@ REPO_RAW="https://raw.githubusercontent.com/st0rer/proxy-sub-builder/main"
 
 echo "=== 1. Проверка и установка пакетов OpenWrt ==="
 opkg update
-for pkg in sing-box curl jq ca-bundle kmod-tun python3-light; do
+for pkg in sing-box curl jq ca-bundle kmod-tun python3-light python3-urllib; do
 	if ! opkg list-installed | grep -q "^${pkg} "; then
 		echo "Устанавливаю $pkg..."
 		opkg install "$pkg" || echo "Предупреждение: $pkg не удалось установить через opkg"

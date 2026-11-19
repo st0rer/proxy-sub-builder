@@ -12,6 +12,29 @@ import base64, json, os, re, sys, urllib.parse as up
 DEFAULT_EXCLUDE = {"RU"}
 
 
+def supports_record_fragment():
+    if os.environ.get("SINGBOX_NO_FRAGMENT") == "1":
+        return False
+    if os.environ.get("SINGBOX_RECORD_FRAGMENT") == "1":
+        return True
+    try:
+        import subprocess
+        for p in ("/opt/bin/sing-box", "/usr/bin/sing-box", "sing-box"):
+            if os.path.exists(p) and os.access(p, os.X_OK):
+                res = subprocess.run([p, "version"], capture_output=True, text=True, timeout=2)
+                m = re.search(r"version\s+(\d+)\.(\d+)", res.stdout or "")
+                if m:
+                    major, minor = int(m.group(1)), int(m.group(2))
+                    return (major > 1) or (major == 1 and minor >= 12)
+                break
+    except Exception:
+        pass
+    return True
+
+
+USE_RECORD_FRAGMENT = supports_record_fragment()
+
+
 def parse_vless(u):
     p = up.urlparse(u)
     q = dict(up.parse_qsl(p.query))
@@ -35,7 +58,8 @@ def parse_vless(u):
             if "utls" not in tls:  # reality требует uTLS, иначе "uTLS is required by reality client"
                 tls["utls"] = {"enabled": True, "fingerprint": "chrome"}
         # Защита от блокировки ТСПУ/DPI на сотовых и стационарных сетях (sing-box >= 1.12)
-        tls["record_fragment"] = True
+        if USE_RECORD_FRAGMENT:
+            tls["record_fragment"] = True
         ob["tls"] = tls
     t = q.get("type", "tcp")
     if t == "grpc":
@@ -114,7 +138,8 @@ def parse_trojan(u):
         tls["insecure"] = True
     if q.get("alpn"):
         tls["alpn"] = q["alpn"].split(",")
-    tls["record_fragment"] = True
+    if USE_RECORD_FRAGMENT:
+        tls["record_fragment"] = True
     ob["tls"] = tls
     t = q.get("type", "tcp")
     if t == "ws":
