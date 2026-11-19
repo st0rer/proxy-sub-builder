@@ -213,6 +213,10 @@ def sanitize_proxy(p):
         if k in p:
             v = sane(p.get(k))
             if not v:
+                # В TUIC v5 пароль может быть пустым при наличии UUID
+                if k == "password" and p.get("type") == "tuic" and p.get("uuid"):
+                    p[k] = ""
+                    continue
                 return None
             p[k] = v
     if p.get("type") in ("vless", "vmess") and p.get("uuid"):
@@ -294,17 +298,27 @@ def probe_delay(port, name, timeout=4000, tries=2):
     запрос с задержкой в секунды (прогрев TLS/очередь), а перегруженная нода
     случайно успевает ответить. Берём минимум из двух — нода с реальным
     соединением подтвердится, случайный отклик не спасёт мёртвую.
+    Двухступенчатая проверка: если TEST_URL заблокирован хостингом, пробуем
+    cp.cloudflare.com, чтобы не терять живые европейские ноды (до 27% ложных отсевов).
     """
     q = urllib.parse.quote(name, safe="")
     best = 0
-    for _ in range(max(1, tries)):
-        u = f"/proxies/{q}/delay?timeout={timeout}&url={urllib.parse.quote(TEST_URL, safe='')}"
-        try:
-            d = int(api(port, u).get("delay") or 0)
-        except Exception:
-            d = 0
-        if d:
-            best = d if not best else min(best, d)
+    urls = [TEST_URL]
+    fb = os.environ.get("FALLBACK_TEST_URL", "http://cp.cloudflare.com/generate_204")
+    if fb and fb != TEST_URL:
+        urls.append(fb)
+
+    for test_u in urls:
+        for _ in range(max(1, tries)):
+            u = f"/proxies/{q}/delay?timeout={timeout}&url={urllib.parse.quote(test_u, safe='')}"
+            try:
+                d = int(api(port, u).get("delay") or 0)
+            except Exception:
+                d = 0
+            if d:
+                best = d if not best else min(best, d)
+                break
+        if best:
             break
     return best
 
@@ -777,12 +791,30 @@ def latency(n_vless=1400):
         links = [l for l in links if l.startswith(pref)]
         print(f"SCAN_ONLY={only}: осталось {len(links)} ссылок")
     hy2 = [l for l in links if l.startswith(("hy2://", "hysteria2://", "hysteria://"))]
+    rare = [l for l in links if l.startswith(("anytls://", "tuic://", "juicity://"))]
     vless = [l for l in links if l.startswith("vless://")]
     reality = [l for l in vless if "security=reality" in l]
     plain = [l for l in vless if "security=reality" not in l]
-    random.seed(7)
-    random.shuffle(reality)
-    random.shuffle(plain)
+
+    # Ротация пула: отдаем приоритет ранее не проверенным нодам, чтобы вся база
+    # (33k+ ссылок) циклически проверялась, а не застревала на одном seed(7) срезе
+    recently_tested = set()
+    if os.path.exists(TESTED_F):
+        try:
+            recently_tested = set(json.load(open(TESTED_F)))
+        except Exception:
+            pass
+
+    rnd = random.Random(int(time.time() // 3600))
+    def sort_untested_first(lst):
+        untested = [x for x in lst if x not in recently_tested]
+        tested = [x for x in lst if x in recently_tested]
+        rnd.shuffle(untested)
+        rnd.shuffle(tested)
+        return untested + tested
+
+    reality = sort_untested_first(reality)
+    plain = sort_untested_first(plain)
     # Стратификация по транспорту: приоритет reality-over-raw-TCP устарел (с февраля 2026
     # ТСПУ морозит именно его после ~16 КБ), поэтому берём квоты по каждому транспорту.
     def has(l, *needles):
@@ -796,14 +828,15 @@ def latency(n_vless=1400):
     per = max(150, n_vless // 5)
     # протоколы, которые понимает YPtun (Xray + sing-box), кроме vless/hy2
     tjs = [l for l in links if l.startswith(("trojan://", "vmess://", "ss://"))]
+    tjs = sort_untested_first(tjs)
     per2 = max(80, n_vless // 8)
-    cand = hy2 + bx[:per] + bg[:per] + bw[:per] + br[:per] + bo[:per] + tjs[:per2 * 3]
+    cand = hy2 + rare + bx[:per] + bg[:per] + bw[:per] + br[:per] + bo[:per] + tjs[:per2 * 3]
     if only:
         # режим одного протокола — квоты не нужны, гоним весь пул
         cand = links
     print(f"RAM {RAM_MB} МБ -> чанк {CHUNK}, верификация {VERIFY_BATCH} нод "
           f"(ip {VERIFY_IP_PAR} пар, скорость {VERIFY_SPEED_PAR} пар)")
-    print(f"hy2={len(hy2)} xhttp={len(bx)} grpc={len(bg)} ws={len(bw)} reality_tcp={len(br)} "
+    print(f"hy2={len(hy2)} rare={len(rare)} xhttp={len(bx)} grpc={len(bg)} ws={len(bw)} reality_tcp={len(br)} "
           f"прочее={len(bo)} trojan/vmess/ss={len(tjs)} -> тестирую {len(cand)}")
     k = kill_stale_mihomo()
     if k:

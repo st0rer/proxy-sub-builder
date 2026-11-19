@@ -271,11 +271,14 @@ def parse_vless(url):
         url, remark = url.split('#', 1)
     else:
         remark = ''
-    m = re.match(r'vless://([^@]+)@(\[[0-9a-fA-F:]+\]|[^:/?#]+):(\d+)(\?.*)?', url)
+    m = re.match(r'vless://([^@]+)@(\[[0-9a-fA-F:]+\]|[^:/?#]+):(\d+)/?(?:\?(.*))?$', url)
     if not m:
-        return None
+        m = re.match(r'vless://([^@]+)@(\[[0-9a-fA-F:]+\]|[^:/?#]+):(\d+)(\?.*)?', url)
+        if not m:
+            return None
     uuid, host, port = m.group(1), m.group(2).strip('[]'), int(m.group(3))
-    q = urllib.parse.parse_qs((m.group(4) or '?').lstrip('?'))
+    raw_q = m.group(4) or ''
+    q = urllib.parse.parse_qs(raw_q.lstrip('?'))
     def g(k, d=None): return (q.get(k) or [d])[0]
     sid = g('sid', '')
     # sid должен быть hex ЧЁТНОЙ длины (mihomo: 2/4/6/8/10/12/14/16 символов)

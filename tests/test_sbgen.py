@@ -152,5 +152,57 @@ class TestSbGen(unittest.TestCase):
             res = subprocess.run([sb_bin, "check", "-c", self.out_file], capture_output=True, text=True)
             self.assertEqual(res.returncode, 0, f"sing-box check failed: {res.stderr}")
 
+    def test_additional_protocols_and_sip002(self):
+        # Outline SIP002 Base64 format: ss://BASE64(method:password@host:port)
+        import base64
+        ss_body = base64.b64encode(b"chacha20-ietf-poly1305:mypass@ss-outline.example.com:8388").decode()
+        ss_link = f"ss://{ss_body}#OutlineNode"
+        parsed_ss = sbgen.parse_ss(ss_link)
+        self.assertIsNotNone(parsed_ss)
+        self.assertEqual(parsed_ss["server"], "ss-outline.example.com")
+        self.assertEqual(parsed_ss["server_port"], 8388)
+        self.assertEqual(parsed_ss["method"], "chacha20-ietf-poly1305")
+
+        # Trojan
+        trojan_link = "trojan://trojanpass@trojan.example.com:443?sni=trojan.example.com#TrojanNode"
+        parsed_tr = sbgen.parse_trojan(trojan_link)
+        self.assertIsNotNone(parsed_tr)
+        self.assertEqual(parsed_tr["type"], "trojan")
+        self.assertEqual(parsed_tr["password"], "trojanpass")
+        self.assertEqual(parsed_tr["tls"]["server_name"], "trojan.example.com")
+
+        # AnyTLS
+        anytls_link = "anytls://anypass@anytls.example.com:443?sni=anytls.example.com#AnyTlsNode"
+        parsed_any = sbgen.parse_anytls(anytls_link)
+        self.assertIsNotNone(parsed_any)
+        self.assertEqual(parsed_any["type"], "anytls")
+        self.assertEqual(parsed_any["password"], "anypass")
+
+        # TUIC
+        tuic_link = "tuic://11111111-2222-3333-4444-555555555555:tuicpass@tuic.example.com:8443?sni=tuic.example.com#TuicNode"
+        parsed_tuic = sbgen.parse_tuic(tuic_link)
+        self.assertIsNotNone(parsed_tuic)
+        self.assertEqual(parsed_tuic["type"], "tuic")
+        self.assertEqual(parsed_tuic["uuid"], "11111111-2222-3333-4444-555555555555")
+
+        # VMess
+        vmess_json = json.dumps({"v": "2", "ps": "VMessNode", "add": "vmess.example.com", "port": "443", "id": "11111111-2222-3333-4444-555555555555", "aid": "0", "net": "ws", "path": "/ws", "tls": "tls"})
+        vmess_link = "vmess://" + base64.b64encode(vmess_json.encode()).decode()
+        parsed_vmess = sbgen.parse_vmess(vmess_link)
+        self.assertIsNotNone(parsed_vmess)
+        self.assertEqual(parsed_vmess["type"], "vmess")
+        self.assertEqual(parsed_vmess["server"], "vmess.example.com")
+        self.assertEqual(parsed_vmess["server_port"], 443)
+
+    def test_vless_trailing_slash_preserves_reality(self):
+        import find_free_vpn as ffv
+        url = "vless://11111111-2222-3333-4444-555555555555@example.com:443/?security=reality&sni=test.com&pbk=4guBGe6r_cFxgQJeUGvfPCYwcQ2TXURlGOs6vyqH1kY#TrailingSlash"
+        p = ffv.parse_vless(url)
+        self.assertIsNotNone(p)
+        self.assertEqual(p["security"], "reality")
+        self.assertEqual(p["sni"], "test.com")
+        self.assertEqual(p["pbk"], "4guBGe6r_cFxgQJeUGvfPCYwcQ2TXURlGOs6vyqH1kY")
+
+
 if __name__ == "__main__":
     unittest.main()

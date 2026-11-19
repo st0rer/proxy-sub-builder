@@ -64,22 +64,132 @@ def parse_hy2(u):
 
 
 def parse_ss(u):
-    raw = u[5:]
+    raw = u[5:].split("#", 1)[0]
+    if "?" in raw:
+        raw, _ = raw.split("?", 1)
+    # SIP002 / Outline: вся связка (method:password@host:port) может быть закодирована в base64
     if "@" not in raw:
-        return None
+        try:
+            dec = base64.b64decode(raw + "=" * (-len(raw) % 4)).decode("utf-8", "ignore")
+            if "@" in dec:
+                raw = dec
+            else:
+                return None
+        except Exception:
+            return None
     userinfo, hostpart = raw.rsplit("@", 1)
-    # userinfo: либо base64(method:password), либо method:password (может быть %-encoded)
     dec = up.unquote(userinfo)
     if ":" not in dec:
         try:
-            dec = base64.b64decode(userinfo + "=" * (-len(userinfo) % 4)).decode()
+            dec = base64.b64decode(userinfo + "=" * (-len(userinfo) % 4)).decode("utf-8", "ignore")
         except Exception:
             return None
+    if ":" not in dec:
+        return None
     method, password = dec.split(":", 1)
     hp = hostpart.split("/")[0].split("?")[0]
-    host, _, port = hp.rpartition(":")
+    if hp.startswith("["):
+        host, _, port = hp.partition("]:")
+        host = host.lstrip("[")
+    else:
+        host, _, port = hp.rpartition(":")
+    if not host or not port.isdigit():
+        return None
     return {"type": "shadowsocks", "server": host, "server_port": int(port),
             "method": method, "password": password}
+
+
+def parse_trojan(u):
+    p = up.urlparse(u)
+    q = dict(up.parse_qsl(p.query))
+    ob = {"type": "trojan", "server": p.hostname, "server_port": p.port,
+          "password": p.username or ""}
+    tls = {"enabled": True}
+    if q.get("sni"):
+        tls["server_name"] = q["sni"]
+    if q.get("allowInsecure") in ("1", "true") or q.get("insecure") in ("1", "true"):
+        tls["insecure"] = True
+    if q.get("alpn"):
+        tls["alpn"] = q["alpn"].split(",")
+    tls["record_fragment"] = True
+    ob["tls"] = tls
+    t = q.get("type", "tcp")
+    if t == "ws":
+        tr = {"type": "ws", "path": q.get("path", "/")}
+        if q.get("host"):
+            tr["headers"] = {"Host": q["host"]}
+        ob["transport"] = tr
+    elif t == "grpc":
+        ob["transport"] = {"type": "grpc", "service_name": q.get("serviceName", "")}
+    return ob
+
+
+def parse_anytls(u):
+    p = up.urlparse(u)
+    q = dict(up.parse_qsl(p.query))
+    ob = {"type": "anytls", "server": p.hostname, "server_port": p.port,
+          "password": p.username or ""}
+    tls = {"enabled": True}
+    if q.get("sni"):
+        tls["server_name"] = q["sni"]
+    if q.get("allowInsecure") in ("1", "true") or q.get("insecure") in ("1", "true"):
+        tls["insecure"] = True
+    ob["tls"] = tls
+    return ob
+
+
+def parse_tuic(u):
+    p = up.urlparse(u)
+    q = dict(up.parse_qsl(p.query))
+    pwd = p.password or ""
+    uuid = p.username or ""
+    if not uuid and pwd:
+        uuid, pwd = pwd, ""
+    ob = {"type": "tuic", "server": p.hostname, "server_port": p.port,
+          "uuid": uuid, "password": pwd}
+    tls = {"enabled": True}
+    if q.get("sni"):
+        tls["server_name"] = q["sni"]
+    if q.get("allowInsecure") in ("1", "true") or q.get("insecure") in ("1", "true"):
+        tls["insecure"] = True
+    ob["tls"] = tls
+    if q.get("congestion_control") or q.get("congestion"):
+        ob["congestion_control"] = q.get("congestion_control") or q.get("congestion")
+    if q.get("udp_relay_mode"):
+        ob["udp_relay_mode"] = q["udp_relay_mode"]
+    return ob
+
+
+def parse_vmess(u):
+    raw = u[8:].split("#", 1)[0]
+    try:
+        dec = base64.b64decode(raw + "=" * (-len(raw) % 4)).decode("utf-8", "ignore")
+        data = json.loads(dec)
+    except Exception:
+        return None
+    server = data.get("add") or data.get("host")
+    port = int(data.get("port") or 0)
+    uuid = data.get("id")
+    if not server or not port or not uuid:
+        return None
+    ob = {"type": "vmess", "server": server, "server_port": port, "uuid": uuid,
+          "security": data.get("scy") or "auto", "alter_id": int(data.get("aid") or 0)}
+    net = data.get("net", "tcp")
+    tls_str = str(data.get("tls", "")).lower()
+    if tls_str in ("tls", "1", "true"):
+        tls = {"enabled": True}
+        sni = data.get("sni") or data.get("host") or ""
+        if sni:
+            tls["server_name"] = sni
+        ob["tls"] = tls
+    if net == "ws":
+        tr = {"type": "ws", "path": data.get("path") or "/"}
+        if data.get("host"):
+            tr["headers"] = {"Host": data["host"]}
+        ob["transport"] = tr
+    elif net == "grpc":
+        ob["transport"] = {"type": "grpc", "service_name": data.get("path") or ""}
+    return ob
 
 
 def load_lines(path):
@@ -143,6 +253,14 @@ def main():
                 ob = parse_hy2(line)
             elif scheme == "ss":
                 ob = parse_ss(line)
+            elif scheme == "trojan":
+                ob = parse_trojan(line)
+            elif scheme == "anytls":
+                ob = parse_anytls(line)
+            elif scheme == "tuic":
+                ob = parse_tuic(line)
+            elif scheme == "vmess":
+                ob = parse_vmess(line)
             else:
                 continue
         except Exception:
