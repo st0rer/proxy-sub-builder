@@ -35,20 +35,46 @@ PI_PASS = os.environ.get("PI_PASS") or paths.secret("pi_pass", "")
 WORK = "/run/vpntest"          # tmpfs на малинке: SD-карту не изнашиваем
 OUT = os.path.join(paths.OUT, "mobile_results.json")
 CACHE = paths.CACHE
-N_HY2 = int(os.environ.get("PI_N_HY2", "8"))
-N_VLESS = int(os.environ.get("PI_N_VLESS", "80"))
-N_SS = int(os.environ.get("PI_N_SS", "35"))
-N_ANYTLS = int(os.environ.get("PI_N_ANYTLS", "15"))
-N_TUIC = int(os.environ.get("PI_N_TUIC", "4"))
-N_POOL = int(os.environ.get("PI_N_POOL", "80"))  # добор из пула
-N_SIB = int(os.environ.get("PI_N_SIB", "40"))     # адреса рабочих панелей (выход 45% против 8%)
+N_HY2 = int(os.environ.get("PI_N_HY2", "14"))
+N_VLESS = int(os.environ.get("PI_N_VLESS", "220"))
+N_SS = int(os.environ.get("PI_N_SS", "90"))
+N_ANYTLS = int(os.environ.get("PI_N_ANYTLS", "30"))
+N_TUIC = int(os.environ.get("PI_N_TUIC", "8"))
+N_POOL = int(os.environ.get("PI_N_POOL", "250"))  # добор из пула
+N_SIB = int(os.environ.get("PI_N_SIB", "90"))     # адреса рабочих панелей (выход 45% против 8%)
 PER_ADDR = 2
+PER_NET = int(os.environ.get("PI_PER_NET", "3"))  # нод с одной /24: Yota режет диапазонами целиком
 API_PORT = 9099
 BASE_PORT = 21000
 FAST_TCP_PRECHECK = os.environ.get("FAST_TCP_PRECHECK", "1") == "1"
 
 
-def filter_live_tcp(links, timeout=1.2, max_workers=25):
+def _net24(host):
+    """Первые три октета IPv4 — Yota блокирует подсети, а не отдельные адреса."""
+    try:
+        import ipaddress
+        return str(ipaddress.ip_network(host + "/24", strict=False))
+    except Exception:
+        return host
+
+
+def diverse_by_net(links, per_net=None):
+    """Не больше per_net нод с одной /24: иначе пул забивается одной подсетью,
+    которую Yota режет целиком, и половина кандидатов мертва ещё до отправки."""
+    per_net = PER_NET if per_net is None else per_net
+    seen = {}
+    out = []
+    for l in links:
+        a = sa._host_of(l)
+        key = _net24(a[0]) if a else l
+        if seen.get(key, 0) >= per_net:
+            continue
+        seen[key] = seen.get(key, 0) + 1
+        out.append(l)
+    return out
+
+
+def filter_live_tcp(links, timeout=1.6, max_workers=48):
     """Быстрая проверка доступности TCP-порта прямо на N100 перед отправкой на малинку.
     Отсеивает ноды с закрытыми портами за 2-4 секунды, избавляя слабый CPU Raspberry Pi 3
     от сотен секунд бессмысленных проверок мертвого пула в фазе RECOVERY.
@@ -394,6 +420,13 @@ def pick_candidates():
             picked.append(link)
             if len(picked) % 10 == 0 and len(picked) > N_HY2 + N_VLESS + N_SS + N_ANYTLS + N_TUIC + 30:
                 break
+
+    # Разнообразие по подсетям: Yota режет диапазоны целиком, поэтому десяток
+    # нод из одной /24 даёт один шанс на всех. Режем до PER_NET на подсеть.
+    before = len(picked)
+    picked = diverse_by_net(picked)
+    if len(picked) < before:
+        print(f"  разнообразие по /24: {before} -> {len(picked)} кандидатов")
     return picked
 
 
@@ -548,7 +581,7 @@ def main():
 
     print(f"проверяю через Yota (малинка, sing-box, нод {sb_used})…")
     r = ssh(f"python3 /opt/vpntest/pi_sb_verify.py {WORK}/sb.json {WORK}/sb_nodes.json "
-            f"{WORK}/out.json", timeout=int(os.environ.get("PI_TIMEOUT", "2400")))
+            f"{WORK}/out.json", timeout=int(os.environ.get("PI_TIMEOUT", "4200")))
     print((r.stdout.decode(errors="ignore") or "")[-1500:])
     if r.returncode:
         print("ошибка на малинке:", r.stderr.decode(errors="ignore")[-400:])
