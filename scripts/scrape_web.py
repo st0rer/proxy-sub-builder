@@ -72,26 +72,58 @@ def extract(text):
     return cleaned
 
 
+def _setup_scrapling():
+    try:
+        from scrapling.fetchers import Fetcher
+        return True
+    except ImportError:
+        for vpath in ("/home/claw/.hermes/venvs/scrapling/lib/python3.11/site-packages",
+                      os.path.expanduser("~/.hermes/venvs/scrapling/lib/python3.11/site-packages")):
+            if os.path.exists(vpath) and vpath not in sys.path:
+                sys.path.insert(0, vpath)
+                try:
+                    from scrapling.fetchers import Fetcher
+                    return True
+                except ImportError:
+                    pass
+    return False
+
+
+_HAS_SCRAPLING = _setup_scrapling()
+
+
 def fetch(url, stealth=False):
-    """Многоуровневый загрузчик: Scrapling (если доступен) -> HTTP с Chrome-заголовками."""
-    if stealth:
+    """Многоуровневый загрузчик: Scrapling (lib или :11236) -> HTTP с Chrome-заголовками."""
+    # 1. Прямой Scrapling через Python библиотеку (curl_cffi / patchright)
+    if _HAS_SCRAPLING:
+        if stealth:
+            try:
+                from scrapling.fetchers import StealthyFetcher
+                page = StealthyFetcher.fetch(url, headless=True, network_idle=True,
+                                             google_search=False, disable_resources=True,
+                                             timeout=30000)
+                return page.html_content
+            except Exception:
+                pass
         try:
-            from scrapling.fetchers import StealthyFetcher
-            page = StealthyFetcher.fetch(url, headless=True, network_idle=True,
-                                         google_search=False, disable_resources=True,
-                                         timeout=60000)
+            from scrapling.fetchers import Fetcher
+            page = Fetcher.get(url, impersonate="chrome", stealthy_headers=True, timeout=25)
             return page.html_content
         except Exception:
             pass
 
+    # 2. Локальный микросервис Scrapling Fastfetch (127.0.0.1:11236)
     try:
-        from scrapling.fetchers import Fetcher
-        page = Fetcher.get(url, stealthy_headers=True, timeout=25)
-        return page.html_content
+        req_payload = json.dumps({"url": url, "f": "raw", "mode": "browser" if stealth else "static", "timeout": 20}).encode()
+        req = urllib.request.Request("http://127.0.0.1:11236/md", data=req_payload, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            data = json.loads(resp.read().decode())
+            if data.get("success") and data.get("markdown"):
+                return data["markdown"]
     except Exception:
         pass
 
-    # Нативный HTTP-клиент с заголовками Chrome 131
+    # 3. Нативный HTTP-клиент с заголовками Chrome 131
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",

@@ -18,7 +18,15 @@
 : "${VPN_CACHE:=$( [ -d "$HOME/.cache/vpn-search" ] && echo "$HOME/.cache/vpn-search" || echo "$PROXY_SUB_HOME/cache" )}"
 : "${VPN_SECRETS:=$( [ -d "$HOME/.hermes/secrets" ] && echo "$HOME/.hermes/secrets" || echo "$PROXY_SUB_HOME/secrets" )}"
 : "${BIN_DIR:=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-: "${PY_SCRAPLING:=python3}"
+if [ -z "${PY_SCRAPLING:-}" ]; then
+  if [ -x "$HOME/.hermes/venvs/scrapling/bin/python3" ]; then
+    PY_SCRAPLING="$HOME/.hermes/venvs/scrapling/bin/python3"
+  elif [ -x "/home/claw/.hermes/venvs/scrapling/bin/python3" ]; then
+    PY_SCRAPLING="/home/claw/.hermes/venvs/scrapling/bin/python3"
+  else
+    PY_SCRAPLING="python3"
+  fi
+fi
 : "${NOTIFY_CMD:=}"
 
 if [ -z "${PI_HOST:-}" ]; then

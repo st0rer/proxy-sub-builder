@@ -78,6 +78,26 @@ DEAD_AFTER = int(os.environ.get("TG_DEAD_AFTER", "6"))     # столько пу
 REJECT_TTL = 3 * 86400                                     # пустые каналы-кандидаты перепроверяем раз в 3 дня
 
 
+def _setup_scrapling():
+    try:
+        from scrapling.fetchers import Fetcher
+        return True
+    except ImportError:
+        for vpath in ("/home/claw/.hermes/venvs/scrapling/lib/python3.11/site-packages",
+                      os.path.expanduser("~/.hermes/venvs/scrapling/lib/python3.11/site-packages")):
+            if os.path.exists(vpath) and vpath not in sys.path:
+                sys.path.insert(0, vpath)
+                try:
+                    from scrapling.fetchers import Fetcher
+                    return True
+                except ImportError:
+                    pass
+    return False
+
+
+_HAS_SCRAPLING = _setup_scrapling()
+
+
 def load(path, default):
     if os.path.exists(path):
         try:
@@ -139,6 +159,13 @@ def fetch(url):
             if last in (429, 500, 502, 503):
                 time.sleep(3 * (attempt + 1) + random.random() * 2)
                 continue
+            if last == 403 and _HAS_SCRAPLING:
+                try:
+                    from scrapling.fetchers import Fetcher
+                    page = Fetcher.get(url, impersonate="chrome", stealthy_headers=True, timeout=20)
+                    return page.body.decode("utf-8", "ignore"), page.status
+                except Exception:
+                    pass
             return "", last
     return "", last
 
@@ -181,15 +208,41 @@ def extract(html):
     return [_html.unescape(l).rstrip(".,;)'\"<>") for l in links]
 
 
-def fetch_sub_links(url, timeout=8):
-    try:
-        req = urllib.request.Request(url, headers=UA)
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read(512 * 1024)
-        text = raw.decode("utf-8", "ignore")
-        return extract(text)
-    except Exception:
-        return []
+def fetch_sub_links(url, timeout=12):
+    text = ""
+    # 1. Scrapling с impersonate="chrome" (обход Cloudflare / WAF на workers.dev, rentry и т.д.)
+    if _HAS_SCRAPLING:
+        try:
+            from scrapling.fetchers import Fetcher
+            page = Fetcher.get(url, impersonate="chrome", stealthy_headers=True, timeout=timeout)
+            if page.status == 200:
+                text = page.body.decode("utf-8", "ignore")
+        except Exception:
+            pass
+
+    # 2. Локальный микросервис Scrapling Fastfetch (:11236)
+    if not text:
+        try:
+            req_payload = json.dumps({"url": url, "f": "raw", "mode": "static", "timeout": timeout}).encode()
+            req = urllib.request.Request("http://127.0.0.1:11236/md", data=req_payload, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=timeout + 2) as resp:
+                data = json.loads(resp.read().decode())
+                if data.get("success") and data.get("markdown"):
+                    text = data["markdown"]
+        except Exception:
+            pass
+
+    # 3. Нативный urllib
+    if not text:
+        try:
+            req = urllib.request.Request(url, headers=UA)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read(512 * 1024)
+            text = raw.decode("utf-8", "ignore")
+        except Exception:
+            return []
+
+    return extract(text)
 
 
 def scan_channel(name, cursor, depth, fetched_subs=None):
