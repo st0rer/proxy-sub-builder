@@ -321,8 +321,13 @@ def main():
         RECOVERY = (("http://cp.cloudflare.com/generate_204", 10, "cp-cf-r"),
                     ("https://www.gstatic.com/generate_204", 8, "gstatic-r"))
         dead = [r for r in rows if not r["delay"]]
+        rec_max = int(os.environ.get("RECOVERY_MAX", "140"))
         if dead and os.environ.get("NO_RECOVERY") != "1":
-            print(f"  второй проход по {len(dead)} мёртвым (длинные таймауты)…", flush=True)
+            subset = dead[:rec_max]
+            skipped = len(dead) - len(subset)
+            print(f"  второй проход по {len(subset)} мёртвым (длинные таймауты)"
+                  + (f", пропущено {skipped} сверх лимита RECOVERY_MAX" if skipped else ""),
+                  flush=True)
             def redo(r):
                 delay, stage = try_stages(r["port"], RECOVERY)
                 if delay:
@@ -332,7 +337,9 @@ def main():
                 return r
             t1 = time.time()
             with cf.ThreadPoolExecutor(max_workers=par) as ex:
-                rows = list(ex.map(redo, rows))
+                fixed = list(ex.map(redo, subset))
+            by_port = {r["port"]: r for r in fixed}
+            rows = [by_port.get(r["port"], r) for r in rows]
             print(f"  второй проход: {time.time()-t1:.0f} c, живых стало "
                   f"{sum(1 for r in rows if r['delay'])}", flush=True)
 
