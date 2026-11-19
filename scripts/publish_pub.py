@@ -164,6 +164,17 @@ def main():
         return 1
     use_gist = "--gist" in sys.argv
     repo = os.environ.get("GITHUB_REPO", "")
+    if not repo and not use_gist and os.path.exists(STATE):
+        try:
+            st = json.load(open(STATE))
+            repo = st.get("repo", "")
+            if not repo and st.get("user"):
+                repo = f"{st['user']}/proxy-sub"
+        except Exception:
+            pass
+    if not repo and not use_gist:
+        print("ошибка: не задан GITHUB_REPO и не найден в secrets/pub_target.json")
+        return 1
 
     def publish_once():
         return to_gist() if use_gist else to_repo(repo)

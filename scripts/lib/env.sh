@@ -51,6 +51,19 @@ if [ -z "${GIST_ID:-}" ]; then
 fi
 export GIST_ID="${GIST_ID:-}"
 
+if [ -z "${GITHUB_REPO:-}" ]; then
+  if [ -f "$PROXY_SUB_HOME/env" ]; then
+    val=$(grep -E '^[[:space:]]*GITHUB_REPO=' "$PROXY_SUB_HOME/env" 2>/dev/null | cut -d= -f2- | tr -d '\r\n "' || true)
+    [ -n "$val" ] && GITHUB_REPO="$val"
+  fi
+  if [ -z "${GITHUB_REPO:-}" ] && [ -f "$VPN_SECRETS/repo" ]; then
+    GITHUB_REPO=$(tr -d '\r\n ' < "$VPN_SECRETS/repo")
+  elif [ -z "${GITHUB_REPO:-}" ] && [ -f "$VPN_SECRETS/pub_target.json" ]; then
+    GITHUB_REPO=$(python3 -c "import json; print(json.load(open('$VPN_SECRETS/pub_target.json')).get('repo',''))" 2>/dev/null || true)
+  fi
+fi
+export GITHUB_REPO="${GITHUB_REPO:-}"
+
 export PROXY_SUB_HOME VPN_OUT VPN_CACHE VPN_SECRETS BIN_DIR PY_SCRAPLING NOTIFY_CMD
 export PROXY_SUB_OUT="$VPN_OUT" PROXY_SUB_CACHE="$VPN_CACHE" PROXY_SUB_SECRETS="$VPN_SECRETS"
 export PROXY_SUB_BIN="$BIN_DIR"
