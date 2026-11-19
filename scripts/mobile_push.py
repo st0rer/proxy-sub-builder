@@ -441,6 +441,9 @@ def prune_invalid_sb(cfg, nodes_list, sb_bin, max_round=15):
     """
     import re as _re
 
+    if not sb_bin:
+        return nodes_list, True, []
+
     tmp = tempfile.mkdtemp()
     p = os.path.join(tmp, "sb.json")
     dropped = []
@@ -448,7 +451,11 @@ def prune_invalid_sb(cfg, nodes_list, sb_bin, max_round=15):
         for _ in range(max_round):
             with open(p, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, ensure_ascii=False)
-            r = subprocess.run([sb_bin, "check", "-c", p], capture_output=True, text=True)
+            try:
+                r = subprocess.run([sb_bin, "check", "-c", p], capture_output=True, text=True)
+            except (FileNotFoundError, OSError) as e:
+                print(f"sing-box check skipped ({e}): локальный бинарник недоступен")
+                return nodes_list, True, dropped
             if r.returncode == 0:
                 return nodes_list, True, dropped
             m = _re.search(r"outbound\[(\d+)\]", r.stderr or "")

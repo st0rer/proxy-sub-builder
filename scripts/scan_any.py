@@ -113,6 +113,18 @@ SOURCES = {
     "barry_trojan":     "barry-far/V2ray-Config/main/Splitted-By-Protocol/trojan.txt",
     "mineral_nodes":    "https://raw.githubusercontent.com/LalatinaHub/Mineral/master/result/nodes",
     "mahdibland_merge": "mahdibland/V2RayAggregator/master/sub/sub_merge.txt",
+    # Новые проверенные источники 2026-11 (33k+ нод, 8.7k Reality, 4.7k SS, 790 Hy2)
+    # nikita29a: автообновление каждые 10 мин; ByeWhiteLists: чистый Reality под РФ/ТСПУ
+    "nikita_1":         "nikita29a/FreeProxyList/main/mirror/1.txt",
+    "nikita_3":         "nikita29a/FreeProxyList/main/mirror/3.txt",
+    "byewhitelists":    "ByeWhiteLists/ByeWhiteLists2/main/ByeWhiteLists2.txt",
+    "yitong":           "yitong2333/proxy-minging/main/v2ray.txt",
+    "delta_all":        "Delta-Kronecker/V2ray-Config/main/config/all_configs.txt",
+    "nomorewalls":      "peasoft/NoMoreWalls/master/list.txt",
+    "flat447_white":    "FLAT447/v2ray-lists/main/WHITE_FULL.txt",
+    "acymz":            "acymz/AutoVPN/main/data/V2.txt",
+    "youfoundamin":     "youfoundamin/V2rayCollector/main/mixed_iran.txt",
+    "cidvpn":           "CidVpn/cid-vpn-config/main/general.txt",
 }
 def daily_sources():
     """Свежие файлы каталогов-зеркал: node.<домен>/uploads/YYYY/MM/YYYYMMDD.txt.

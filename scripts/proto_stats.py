@@ -13,7 +13,13 @@ import json
 import os
 import sys
 
-CACHE = os.path.expanduser("~/.cache/vpn-search")
+# Подключаем пути проекта
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import paths
+    CACHE = paths.CACHE
+except Exception:
+    CACHE = os.environ.get("PROXY_SUB_CACHE", os.path.expanduser("~/.cache/vpn-search"))
 
 
 def fam(link):
@@ -25,13 +31,18 @@ def load_runs():
     runs = []
     for f in sorted(glob.glob(os.path.join(CACHE, "runs", "*", "run.json"))):
         try:
-            runs.append(json.load(open(f, encoding="utf-8")))
+            with open(f, encoding="utf-8") as fp:
+                runs.append(json.load(fp))
         except Exception:
             continue
     if not runs:
         sent_f, out_f = "/tmp/pian/sb_nodes.json", "/tmp/pian/out.json"
         if os.path.exists(sent_f) and os.path.exists(out_f):
-            runs.append({"sent": json.load(open(sent_f)), "out": json.load(open(out_f))})
+            try:
+                with open(sent_f, encoding="utf-8") as fs, open(out_f, encoding="utf-8") as fo:
+                    runs.append({"sent": json.load(fs), "out": json.load(fo)})
+            except Exception:
+                pass
     return runs
 
 

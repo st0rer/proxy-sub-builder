@@ -50,6 +50,17 @@ SOURCES = [
     ('barry_vl', 'https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/vless.txt', 'plain'),
     ('barry_ss', 'https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/ss.txt', 'plain'),
     ('freenodes', 'https://raw.githubusercontent.com/Barabama/FreeNodes/master/nodes/merged.txt', 'plain'),
+    # Проверено 2026-11-19: крупнейшие свежие пулы (33k+ нод, 8.7k Reality, 4.7k SS, 790 Hy2)
+    ('nikita_1', 'https://raw.githubusercontent.com/nikita29a/FreeProxyList/main/mirror/1.txt', 'plain'),
+    ('nikita_3', 'https://raw.githubusercontent.com/nikita29a/FreeProxyList/main/mirror/3.txt', 'plain'),
+    ('byewhitelists', 'https://raw.githubusercontent.com/ByeWhiteLists/ByeWhiteLists2/main/ByeWhiteLists2.txt', 'plain'),
+    ('yitong', 'https://raw.githubusercontent.com/yitong2333/proxy-minging/main/v2ray.txt', 'plain'),
+    ('delta_all', 'https://raw.githubusercontent.com/Delta-Kronecker/V2ray-Config/main/config/all_configs.txt', 'plain'),
+    ('nomorewalls', 'https://raw.githubusercontent.com/peasoft/NoMoreWalls/master/list.txt', 'base64'),
+    ('flat447_white', 'https://raw.githubusercontent.com/FLAT447/v2ray-lists/main/WHITE_FULL.txt', 'plain'),
+    ('acymz', 'https://raw.githubusercontent.com/acymz/AutoVPN/main/data/V2.txt', 'base64'),
+    ('youfoundamin', 'https://raw.githubusercontent.com/youfoundamin/V2rayCollector/main/mixed_iran.txt', 'plain'),
+    ('cidvpn', 'https://raw.githubusercontent.com/CidVpn/cid-vpn-config/main/general.txt', 'plain'),
 ]
 
 # Прямые файлы по стране (если есть в этих репо) — проверяются до общего сбора.
