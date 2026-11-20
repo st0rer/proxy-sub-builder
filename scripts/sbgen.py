@@ -399,7 +399,24 @@ def main():
     # Приоритет: Hysteria2 (быстрый UDP/BBR без потерь), затем VLESS/Trojan/SS.
     gcp_pool = []
     if geo_path:
-        gcp_pool = [ob["tag"] for ob in out if geo.get(key_of(ob), {}).get("gemini") == "ok"]
+        # Google-гео расходится с ip-api: M247 (vcerx-ru-*.my-fade.cloud) числится
+        # как NO, а Google считает его РФ — такие ноды отдают 400 FAILED_PRECONDITION
+        # «User location is not supported for the API use». Поэтому мало проверить
+        # gemini=ok: страну и хостера фильтруем отдельно.
+        NOT_GCP_CC = {"RU", "BY", "HK", "CN", "IR", "KP"}
+        NOT_GCP_HOST = ("m247", "my-fade")
+        for ob in out:
+            g = geo.get(key_of(ob), {})
+            if g.get("gemini") != "ok":
+                continue
+            if (g.get("cc") or "").upper() in NOT_GCP_CC:
+                continue
+            isp = (g.get("isp") or "").lower()
+            sni = ((ob.get("tls") or {}).get("server_name") or "").lower()
+            srv = (ob.get("server") or "").lower()
+            if any(h in isp or h in sni or h in srv for h in NOT_GCP_HOST):
+                continue
+            gcp_pool.append(ob["tag"])
     if not gcp_pool:
         gcp_pool = [t for t in tags if t != "cf"]
 
