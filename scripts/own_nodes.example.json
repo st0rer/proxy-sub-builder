@@ -1,0 +1,33 @@
+{
+  "_comment": "Свои узлы для gcp/proxy/video. Копировать в $VPN_SECRETS/own_nodes.json (chmod 600) или указать путь в SINGBOX_OWN_NODES. Порядок = приоритет: первый тег становится default у селекторов gcp/proxy/video.",
+  "endpoints": [
+    {
+      "type": "wireguard",
+      "tag": "my-wireguard",
+      "system": false,
+      "address": ["10.66.66.11/32", "fd42:42:42::11/128"],
+      "private_key": "<PRIVATE_KEY>",
+      "mtu": 1324,
+      "peers": [
+        {
+          "address": "<VPS_IP>",
+          "port": 51820,
+          "public_key": "<PEER_PUBLIC_KEY>",
+          "pre_shared_key": "<PSK>",
+          "allowed_ips": ["0.0.0.0/0", "::/0"]
+        }
+      ]
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "hysteria2",
+      "tag": "my-hysteria2",
+      "server": "<VPS_DOMAIN>",
+      "server_port": 443,
+      "password": "<HY2_PASSWORD>",
+      "tls": {"enabled": true, "server_name": "<VPS_DOMAIN>", "insecure": false},
+      "obfs": {"type": "salamander", "password": "<OBFS_PASSWORD>"}
+    }
+  ]
+}

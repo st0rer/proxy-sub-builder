@@ -333,7 +333,29 @@ def main():
     # Держим отдельно от подписки: её не фильтруем и ставим первой, потому что Google
     # принимает выход Cloudflare (доверенный CDN), а датацентровые IP free-нод часто
     # помечает как VPN/не ту страну. Если файла нет — просто пропускаем.
+    # 3-Tier Failover: Tier 1 — свой WireGuard endpoint, Tier 2 — свой Hysteria2, Tier 3 — ноды подписки.
+    # ⚠️ Секреты в код не кладём: свои узлы читаются из JSON вне репозитория (chmod 600).
+    # Формат: {"endpoints": [<sing-box endpoint>, ...], "outbounds": [<sing-box outbound>, ...]}
+    # Порядок важен: первый тег — приоритетный выход для gcp/proxy/video.
+    endpoints = []
     own = []
+    own_tags = []
+    own_path = os.environ.get(
+        "SINGBOX_OWN_NODES",
+        os.path.join(os.environ.get("VPN_SECRETS", os.path.expanduser("~/.hermes/secrets")), "own_nodes.json"))
+    if os.path.exists(own_path):
+        try:
+            own_cfg = json.load(open(own_path))
+            endpoints = own_cfg.get("endpoints") or []
+            own = own_cfg.get("outbounds") or []
+            own_tags = [e["tag"] for e in endpoints] + [o["tag"] for o in own]
+            print(f"own nodes: {own_tags}")
+        except Exception as e:
+            print(f"own nodes skipped: {e}")
+            endpoints, own, own_tags = [], [], []
+    else:
+        print(f"own nodes: файла {own_path} нет — только подписка")
+
     cfp = os.environ.get("SINGBOX_CF_NODE",
                          os.path.join(os.environ.get("VPN_SECRETS", os.path.expanduser("~/.hermes/secrets")),
                                       "cf_node.json"))
@@ -348,19 +370,24 @@ def main():
                         "transport": {"type": "ws", "path": c["ws_path"],
                                       "headers": {"Host": c["host"]}}})
         except Exception as e:
-            print(f"own node skipped: {e}")
+            print(f"cf node skipped: {e}")
 
     # домены, которым нужен чистый Google-выход (ноды вне Cloudflare, прошедшие проверку Gemini/IDE),
     # и которые при этом не тянут за собой видео-трафик YouTube
     GCP_DOMAINS = [
         "google.com", "googleapis.com", "gstatic.com", "googleusercontent.com",
         "google.dev", "antigravity.google", "recaptcha.net",
+        "gemini.google.com", "ai.google.dev", "generativelanguage.googleapis.com",
+        "alkalimakersuite-pa.googleapis.com", "maker-suite.google.com",
+        "cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com",
+        "aicode.googleapis.com", "deepmind.google", "deepmind.com",
     ]
     # видео-стриминг YouTube: выделенный скоростной пул европейских кэшей GGC
     # с принудительным сбросом QUIC (UDP 443) на стабильный TCP
     VIDEO_DOMAINS = [
         "googlevideo.com", "youtube.com", "ytimg.com", "youtubei.googleapis.com",
-        "yt.be", "gvt1.com",
+        "yt.be", "gvt1.com", "youtu.be", "yt3.ggpht.com", "redirector.googlevideo.com",
+        "wide-youtube.l.google.com", "jnn-pa.googleapis.com",
     ]
     EU_GEO = {"FI", "SE", "EE", "LV", "LT", "DE", "NL", "PL", "FR", "GB", "CZ", "AT"}
     # фоновые опросы устройств и Chrome: через воркер им не нужно, Gemini они не обслуживают,
@@ -380,6 +407,10 @@ def main():
     inbounds = [
         {"type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 1080},
     ]
+    # отдельные socks-входы для проверки каждого своего узла по отдельности
+    for i, tag in enumerate(own_tags[:2]):
+        inbounds.append({"type": "socks", "tag": f"socks-own{i+1}",
+                         "listen": "127.0.0.1", "listen_port": 1081 + i})
     if mode in ("tun", "mixed"):
         inbounds.append({
             "type": "tun", "tag": "tun-in", "interface_name": tun_dev,
@@ -420,15 +451,15 @@ def main():
     if not gcp_pool:
         gcp_pool = [t for t in tags if t != "cf"]
 
-    hy_nodes = [t for t in gcp_pool if t.startswith("hyst")]
-    other_nodes = [t for t in gcp_pool if not t.startswith("hyst")]
-    gcp_sorted = hy_nodes + other_nodes
-    gcp_candidates = gcp_sorted[:8]
-    if not gcp_candidates or gcp_candidates == ["auto"]:
+    hy_nodes = [t for t in gcp_pool if t.startswith("hyst") and t not in own_tags]
+    other_nodes = [t for t in gcp_pool if not t.startswith("hyst") and t not in own_tags]
+    gcp_sorted = own_tags + hy_nodes + other_nodes
+    gcp_candidates = gcp_sorted[:10]
+    if not gcp_candidates:
         gcp_candidates = ["direct"]
     elif "auto" not in gcp_candidates:
         gcp_candidates.append("auto")
-    default_gcp = gcp_candidates[0]
+    default_gcp = own_tags[0] if own_tags else gcp_candidates[0]
 
     # Пул для YouTube / видео-стриминга (video):
     # Приоритет: 1) замер скорости (speed_mbps), 2) близость к кэшам Google Video в Европе (EU_GEO),
@@ -443,55 +474,50 @@ def main():
         return (speed, is_eu, is_fast_proto)
 
     video_sorted = sorted(out, key=video_rank, reverse=True)
-    video_candidates = [ob["tag"] for ob in video_sorted[:8] if ob["tag"] != "cf"]
+    video_candidates = [ob["tag"] for ob in video_sorted[:8] if ob["tag"] not in ["cf"] + own_tags]
     if not video_candidates:
-        video_candidates = [t for t in tags[:8] if t != "cf"]
+        video_candidates = [t for t in tags[:8] if t not in ["cf"] + own_tags]
     if not video_candidates:
         video_candidates = ["direct"]
 
     auto_outbounds = tags if tags else ["direct"]
-    proxy_outbounds = ["auto"] + (["cf"] if own else []) + (tags if tags else ["direct"])
+    proxy_outbounds = own_tags + ["auto"] + [t for t in tags if t not in own_tags]
 
     cfg = {
         "log": {"level": "warn", "timestamp": True},
         "inbounds": inbounds,
+        "endpoints": endpoints,
         "outbounds": own + out + [
             {"type": "urltest", "tag": "auto", "outbounds": auto_outbounds,
              "url": "https://www.gstatic.com/generate_204",
              "interval": "1m", "tolerance": 30},
-            # video — выделенный скоростной пул для YouTube (минимизирует RTT к GGC кэшам, изолирован от Gemini)
             {"type": "urltest", "tag": "video-auto", "outbounds": video_candidates,
              "url": "https://www.gstatic.com/generate_204",
              "interval": "2m", "tolerance": 25},
             {"type": "selector", "tag": "video",
-             "outbounds": ["video-auto"] + video_candidates,
-             "default": "video-auto"},
-            # gcp — чистый Google-выход (Antigravity/CloudCode/Gemini): ротация по пулу проверенных нод
+             "outbounds": own_tags + ["video-auto"] + video_candidates,
+             "default": own_tags[0] if own_tags else "video-auto"},
             {"type": "selector", "tag": "gcp",
              "outbounds": gcp_candidates,
              "default": default_gcp},
-            {"type": "selector", "tag": "proxy", "outbounds": proxy_outbounds, "default": "auto"},
+            {"type": "selector", "tag": "proxy", "outbounds": proxy_outbounds,
+             "default": own_tags[0] if own_tags else "auto"},
             {"type": "direct", "tag": "direct"},
         ],
         "route": {
             "rules": [
-                # без sniff правила по домену не сработают: из tun приходит только IP
+                *[{"inbound": [f"socks-own{i+1}"], "outbound": tag}
+                  for i, tag in enumerate(own_tags[:2])],
                 {"inbound": sniff_inbounds, "action": "sniff"},
-                # 1. Принудительный сброс QUIC (UDP 443) для видеодоменов:
-                # заставляет браузеры мгновенно переключаться на стабильный TCP HTTP/2
-                # без 3-5-секундных таймаутов и дропов пакетов ТСПУ
+                # Universal QUIC reject (UDP 443): prevents stalls across all services
                 {
                     "network": "udp",
                     "port": 443,
-                    "domain_suffix": VIDEO_DOMAINS,
                     "action": "reject",
                     "method": "default",
                 },
-                # 2. Видеопотоки YouTube -> выделенный видео-пул
                 {"domain_suffix": VIDEO_DOMAINS, "outbound": "video"},
-                # 3. Исключения фоновых запросов Google -> proxy
                 {"domain_suffix": GCP_BYPASS, "outbound": "proxy"},
-                # 4. Google AI / Antigravity / Gemini -> gcp
                 {"domain_suffix": GCP_DOMAINS, "outbound": "gcp"},
             ],
             "final": "proxy",
